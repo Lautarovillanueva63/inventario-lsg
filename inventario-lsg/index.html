@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Inventario de Obra LSG</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===================== LOGIN ===================== -->
+<section id="vLogin" class="login" hidden>
+  <form id="fLogin" class="login-card" novalidate>
+    <span class="mark">LSG</span>
+    <h1>Inventario de obra</h1>
+    <p class="muted">Ingresá con el usuario que te dio el administrador.</p>
+    <label><span>Email</span><input type="email" id="lEmail" autocomplete="username" required></label>
+    <label><span>Contraseña</span><input type="password" id="lPass" autocomplete="current-password" required></label>
+    <p id="lError" class="error" hidden></p>
+    <button type="submit" class="btn primary" id="lBtn">Ingresar</button>
+  </form>
+</section>
+
+<!-- ===================== APP ===================== -->
+<div class="app" id="vApp" hidden>
+  <header class="top">
+    <div class="brand">
+      <span class="mark">LSG</span>
+      <div><h1>Inventario de obra</h1><p class="sub">Herramientas y materiales por ubicación</p></div>
+    </div>
+    <div class="top-actions">
+      <span id="estado" class="pill">Conectando</span>
+      <span id="rolBadge" class="chip" hidden></span>
+      <span id="quienSoy" class="muted"></span>
+      <button class="btn ghost sm" data-act="miClave">Cambiar contraseña</button>
+      <button class="btn ghost sm" data-act="salir">Salir</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab on" data-tab="ubic" role="tab">Ubicaciones</button>
+    <button class="tab" data-tab="herr" role="tab">Herramientas</button>
+    <button class="tab" data-tab="mov" role="tab">Remitos y movimientos</button>
+    <button class="tab" data-tab="flota" role="tab">Vehículos</button>
+  </nav>
+
+  <main>
+    <!-- Ubicaciones -->
+    <section id="vUbic" class="v-ubic">
+      <aside>
+        <div class="lista-head"><h3>Obras y depósito</h3><button id="btnUbic" class="btn ghost sm" data-act="nuevaUbic" hidden>+ Obra</button></div>
+        <div id="listaUbic"><div class="vacio">Cargando ubicaciones…</div></div>
+      </aside>
+      <section id="detalle"></section>
+    </section>
+
+    <!-- Buscador de herramientas -->
+    <section id="vHerr" hidden>
+      <div class="mov-head"><h2>Herramientas y equipos</h2><input id="buscaHerr" type="search" placeholder="Buscar por código, nombre u obra" aria-label="Buscar herramientas"></div>
+      <div id="listaHerr"></div>
+    </section>
+
+    <!-- Flota de vehículos (flota.js) -->
+    <section id="vFlota" hidden></section>
+
+    <!-- Movimientos -->
+    <section id="vMov" hidden>
+      <div class="mov-head">
+        <h2>Remitos y movimientos</h2>
+        <div class="filtros">
+          <select id="filtroMov" aria-label="Filtrar movimientos">
+            <option value="todos">Todos</option>
+            <option value="traslado">Remitos LSG (traslados)</option>
+            <option value="pendientes">Remitos sin firma</option>
+            <option value="proveedor">Ingresos de proveedor</option>
+            <option value="alta">Altas de inventario</option>
+            <option value="consumo">Consumos y bajas</option>
+          </select>
+          <input id="buscaMov" type="search" placeholder="Buscar remito, capataz, ítem…" aria-label="Buscar movimientos">
+        </div>
+      </div>
+      <div id="listaMov"></div>
+    </section>
+  </main>
+</div>
+
+<datalist id="dlMat"></datalist>
+<datalist id="dlHerr"></datalist>
+<datalist id="dlProv"></datalist>
+<datalist id="dlRecibe"></datalist>
+
+<!-- ===================== NUEVO MOVIMIENTO ===================== -->
+<dialog id="dlgMov">
+  <form id="fMov" novalidate>
+    <div class="d-head"><h2 id="mTitulo">Movimiento</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+    <div class="d-body">
+      <fieldset class="seg" id="mTipos">
+        <legend>¿Qué querés hacer?</legend>
+        <label><input type="radio" name="mtipo" value="traslado" id="mtTras"><span>Mover con remito</span></label>
+        <label><input type="radio" name="mtipo" value="proveedor" id="mtProv"><span>Ingreso de proveedor</span></label>
+        <label><input type="radio" name="mtipo" value="alta" id="mtAlta"><span>Cargar lo que ya hay</span></label>
+        <label><input type="radio" name="mtipo" value="consumo" id="mtCons"><span>Consumo o baja</span></label>
+      </fieldset>
+      <p id="mAyuda" class="ayuda"></p>
+
+      <div class="grid2">
+        <label id="wOrigen"><span>Sale de</span><select id="mOrigen"></select></label>
+        <label id="wDestino"><span id="lDestino">Va a</span><select id="mDestino"></select></label>
+        <label id="wProv"><span>Proveedor</span><input id="mProv" list="dlProv" autocomplete="off" placeholder="Ej. Corralón Sur"></label>
+        <label id="wNumProv"><span>N° de remito del proveedor</span><input id="mNumProv" autocomplete="off" placeholder="Ej. 0003-00012345"></label>
+        <label id="wRecibe"><span>Recibe (capataz que firma)</span><input id="mRecibe" list="dlRecibe" autocomplete="off" placeholder="Nombre y apellido"></label>
+        <label id="wEntrega"><span>Entrega</span><input id="mEntrega" autocomplete="off" placeholder="Opcional"></label>
+        <label><span>Fecha</span><input type="date" id="mFecha"></label>
+      </div>
+
+      <!-- Herramientas: elegir de las que hay en el origen -->
+      <div id="bHerrSel" class="bloque">
+        <div class="items-head"><span class="lbl" id="lHerrSel">Herramientas</span><span class="contador" id="cHerrSel"></span></div>
+        <input id="mFiltroHerr" type="search" placeholder="Filtrar herramientas…" aria-label="Filtrar herramientas">
+        <div id="listaHerrSel" class="checklist"></div>
+      </div>
+      <!-- Herramientas: unidades nuevas -->
+      <div id="bHerrNew" class="bloque">
+        <div class="items-head"><span class="lbl">Herramientas y equipos nuevos</span><button type="button" class="btn ghost sm" data-act="filaHerr">+ Herramienta</button></div>
+        <p class="ayuda chica">Si ponés 2 unidades de "Trompo hormigonero", se crean "Trompo hormigonero 1" y "Trompo hormigonero 2", cada una con su código.</p>
+        <div id="filasHerr" class="filas"></div>
+      </div>
+
+      <!-- Materiales: elegir de los que hay en el origen -->
+      <div id="bMatSel" class="bloque">
+        <div class="items-head"><span class="lbl">Materiales</span></div>
+        <div id="listaMatSel" class="matsel"></div>
+      </div>
+      <!-- Materiales: nuevos -->
+      <div id="bMatNew" class="bloque">
+        <div class="items-head"><span class="lbl">Materiales</span><button type="button" class="btn ghost sm" data-act="filaMat">+ Material</button></div>
+        <div id="filasMat" class="filas"></div>
+      </div>
+
+      <div class="foto-box" id="wFoto">
+        <span class="lbl">Foto del remito del proveedor</span>
+        <div id="previews" class="previews"></div>
+        <input type="file" id="mFoto" accept="image/*,application/pdf" multiple>
+      </div>
+      <label><span id="lNota">Observaciones</span><textarea id="mNota" rows="2"></textarea></label>
+      <p id="mError" class="error" hidden></p>
+    </div>
+    <div class="d-foot">
+      <button type="button" class="btn" data-close>Cancelar</button>
+      <button type="submit" class="btn primary" id="mGuardar">Confirmar</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ===================== OBRA / UBICACIÓN ===================== -->
+<dialog id="dlgUbic">
+  <form id="fUbic" novalidate>
+    <div class="d-head"><h2 id="uTitulo">Nueva obra</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+    <div class="d-body">
+      <label><span>Nombre</span><input id="uNombre" placeholder="Ej. OB-001 Bahía Blanca Planta 2" autocomplete="off"></label>
+      <fieldset class="seg"><legend>Tipo</legend>
+        <label><input type="radio" name="utipo" value="obra" id="uObra" checked><span>Obra</span></label>
+        <label><input type="radio" name="utipo" value="deposito" id="uDep"><span>Depósito</span></label>
+      </fieldset>
+      <label><span>Dirección o referencia</span><input id="uDir" placeholder="Opcional" autocomplete="off"></label>
+      <label class="check" id="wrapActiva" hidden><input type="checkbox" id="uActiva" checked> Obra activa (desmarcala para finalizarla; el historial se conserva)</label>
+      <p id="uError" class="error" hidden></p>
+    </div>
+    <div class="d-foot"><button type="button" class="btn" data-close>Cancelar</button><button type="submit" class="btn primary" id="uGuardar">Guardar</button></div>
+  </form>
+</dialog>
+
+<!-- ===================== FLOTA: formularios ===================== -->
+<dialog id="dlgFlota"><div class="dlg">
+  <div class="d-head"><h2 id="flTitulo">Vehículo</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+  <div class="d-body" id="flBody"></div>
+  <div class="d-foot" id="flFoot"></div>
+</div></dialog>
+
+<!-- ===================== FINALIZAR OBRA ===================== -->
+<dialog id="dlgFin"><div class="dlg">
+  <div class="d-head"><h2 id="fTitulo2">Finalizar obra</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+  <div class="d-body" id="fBody"></div>
+  <div class="d-foot" id="fFoot"></div>
+</div></dialog>
+
+<!-- ===================== HERRAMIENTA ===================== -->
+<dialog id="dlgHerr"><div class="dlg">
+  <div class="d-head"><h2 id="hTitulo">Herramienta</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+  <div class="d-body" id="hBody"></div>
+  <div class="d-foot" id="hFoot"></div>
+</div></dialog>
+
+<!-- ===================== CAMBIAR CONTRASEÑA ===================== -->
+<dialog id="dlgClave">
+  <form id="fClave" novalidate>
+    <div class="d-head"><h2>Cambiar contraseña</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+    <div class="d-body">
+      <p class="muted" style="margin:0">Elegí una contraseña de al menos 8 caracteres. La próxima vez entrás con la nueva.</p>
+      <label><span>Nueva contraseña</span><input type="password" id="cNueva" autocomplete="new-password"></label>
+      <label><span>Repetila</span><input type="password" id="cRepite" autocomplete="new-password"></label>
+      <p id="cError" class="error" hidden></p>
+      <p id="cOk" class="ok" hidden>Listo, tu contraseña se cambió.</p>
+    </div>
+    <div class="d-foot"><button type="button" class="btn" data-close>Cancelar</button><button type="submit" class="btn primary" id="cGuardar">Guardar contraseña</button></div>
+  </form>
+</dialog>
+
+<!-- ===================== VER MOVIMIENTO / REMITO ===================== -->
+<dialog id="dlgVer"><div class="dlg">
+  <div class="d-head"><h2 id="vTitulo">Remito</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+  <div class="d-body" id="vBody"></div>
+  <div class="d-foot" id="vFoot"></div>
+</div></dialog>
+<input type="file" id="fFirmado" accept="image/*,application/pdf" multiple hidden>
+<input type="file" id="fFotoItem" accept="image/*" hidden>
+<dialog id="dlgFoto" class="lightbox" aria-label="Foto ampliada"><img id="fotoGrande" alt="Foto ampliada"><p class="muted">Tocá para cerrar</p></dialog>
+
+<!-- ===================== REMITO PARA IMPRIMIR ===================== -->
+<div id="printArea" aria-hidden="true"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.3/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="flota.js"></script>
+</body>
+</html>
