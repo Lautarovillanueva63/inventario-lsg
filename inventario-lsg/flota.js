@@ -14,7 +14,7 @@
    ===================================================================== */
 const F = {
   veh:[], venc:[], serv:[], cargas:[], dist:[], lect:[], docs:[], loaded:{}, falta:false, iniciado:false,
-  sel:null, vista:'flota', mes: hoy().slice(0,7), canal:null, urls:{}, firmando:{},
+  sel:null, vista:'flota', mes: hoy().slice(0,7), canal:null, urls:{}, vence:{}, firmando:{},
   form:null, fotos:[]
 };
 try{ F.sel = localStorage.getItem('flota.sel'); }catch(e){}
@@ -67,13 +67,12 @@ function fEscuchar(){
   setInterval(()=>{ if(F.iniciado && !document.hidden && !S.enVivo) fCargarTodo(); }, 30000);
 }
 async function fFirmar(paths){
-  const falt = [...new Set(paths)].filter(p=>p && !F.urls[p] && !F.firmando[p]);
-  if(!falt.length) return;
-  falt.forEach(p=>F.firmando[p]=1);
-  const {data} = await sb.storage.from(BUCKET).createSignedUrls(falt, 86400);
-  (data||[]).forEach(d=>{ if(d.signedUrl) F.urls[d.path] = d.signedUrl; });
-  fRender();
+  if(await pedirFirmas(F.urls, F.vence, F.firmando, paths, 86400)) fRender();
 }
+// Lo llama renovarFotos (app.js): si algún link de la flota venció, repinta y fRender los pide de nuevo.
+window.flotaRenovar = () => {
+  if(F.iniciado && Object.keys(F.urls).some(p=>!vigente(F.urls, F.vence, p))) fRender();
+};
 sb.auth.onAuthStateChange((_e, s)=>{
   if(s && !F.iniciado){ F.iniciado = true; fCargarTodo(); fEscuchar(); }
   if(!s){ F.iniciado = false; }

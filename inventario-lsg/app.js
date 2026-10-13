@@ -29,7 +29,7 @@ const S = {
   me:null, admin:false,
   ubic:[], herr:[], mats:[], stock:[], movs:[], evs:[], loaded:{},
   sel:null, tab:'ubic', verBajas:false,
-  urls:{}, firmando:{}, canal:null,
+  urls:{}, vence:{}, firmando:{}, canal:null,
   mov:null, fotosNuevas:[], verId:null
 };
 try{ S.sel = localStorage.getItem('inv.sel'); }catch(e){}
@@ -100,15 +100,36 @@ function escucharCambios(){
   S.respaldo = setInterval(()=>{ if(!S.enVivo && S.me && !document.hidden) cargarTodo(); }, 30000);
 }
 
-// Fotos: el bucket es privado; pedimos links temporales (1 hora).
-async function firmar(paths){
-  const falt = [...new Set(paths)].filter(p=>p && !S.urls[p] && !S.firmando[p]);
-  if(!falt.length) return;
-  falt.forEach(p=>S.firmando[p]=1);
-  const {data} = await sb.storage.from(BUCKET).createSignedUrls(falt, 3600);
-  (data||[]).forEach(d=>{ if(d.signedUrl) S.urls[d.path] = d.signedUrl; });
-  if($('#dlgVer').open) abrirVer(S.verId, true);
+// Fotos: el bucket es privado, así que pedimos "links firmados" que VENCEN.
+// Guardamos cuándo vence cada uno (vence[path]) y lo volvemos a pedir antes de que caduque.
+const MARGEN_MS = 10*60*1000;                       // renovamos 10 min antes de que venza
+const vigente = (urls, vence, p) => !!urls[p] && (vence[p]||0) > Date.now();
+async function pedirFirmas(urls, vence, firmando, paths, segundos){
+  const falt = [...new Set(paths)].filter(p=>p && !vigente(urls, vence, p) && !firmando[p]);
+  if(!falt.length) return false;
+  falt.forEach(p=>firmando[p]=1);
+  try{
+    const {data} = await sb.storage.from(BUCKET).createSignedUrls(falt, segundos);
+    const hasta = Date.now() + segundos*1000 - MARGEN_MS;
+    (data||[]).forEach(d=>{ if(d.signedUrl){ urls[d.path] = d.signedUrl; vence[d.path] = hasta; } });
+    return true;
+  } catch(e){ return false; }
+  finally { falt.forEach(p=>delete firmando[p]); }   // si falló, se reintenta en el próximo pedido
 }
+async function firmar(paths){
+  if(await pedirFirmas(S.urls, S.vence, S.firmando, paths, 3600) && $('#dlgVer').open) abrirVer(S.verId, true);
+}
+// Cada 5 minutos, y al volver a la pestaña, renovamos los links que estén por vencer.
+function renovarFotos(){
+  if(!S.me) return;
+  const hayVencidos = Object.keys(S.urls).some(p=>!vigente(S.urls, S.vence, p));
+  if(hayVencidos){ firmarFotos(); if($('#dlgVer').open) abrirVer(S.verId, true); }
+  window.flotaRenovar?.();
+}
+setInterval(renovarFotos, 5*60*1000);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) renovarFotos(); });
+window.addEventListener('focus', renovarFotos);    // al volver de la suspensión de la compu
+window.addEventListener('online', renovarFotos);   // al volver internet
 async function comprimir(file){
   if(!file.type.startsWith('image/') || file.type==='image/gif') return file;
   try{
@@ -135,13 +156,10 @@ async function subirArchivos(files, onProgreso){
 async function registrarEvento(texto){ await sb.from('eventos').insert({texto, por:S.me}); }
 
 /* ---------- Fotos de herramientas y materiales ---------- */
-// Las fotos están en un bucket privado: pedimos links firmados (válidos 24 h) para todas las que falten.
+// Links firmados de 24 h para las fotos de herramientas y materiales (se renuevan solos, ver renovarFotos).
 async function firmarFotos(){
-  const faltan = [...S.herr, ...S.mats].map(x=>x.foto).filter(p=>p && !S.urls[p] && !S.firmando[p]);
-  if(!faltan.length) return;
-  faltan.forEach(p=>S.firmando[p]=1);
-  const {data} = await sb.storage.from(BUCKET).createSignedUrls([...new Set(faltan)], 86400);
-  (data||[]).forEach(d=>{ if(d.signedUrl) S.urls[d.path] = d.signedUrl; });
+  const paths = [...S.herr, ...S.mats].map(x=>x.foto);
+  if(!await pedirFirmas(S.urls, S.vence, S.firmando, paths, 86400)) return;
   render();
   if(dlgH?.open) (S.fichaTipo==='mat' ? abrirMat(S.fichaId) : abrirHerr(S.fichaId));
 }
