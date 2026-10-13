@@ -21,10 +21,10 @@ try{ F.sel = localStorage.getItem('flota.sel'); }catch(e){}
 
 const TIPOS_VEH = {camioneta:'Camioneta', camion:'Camión', utilitario:'Utilitario', auto:'Auto', maquina:'Máquina', otro:'Otro'};
 const COMB = {gasoil:'Gasoil', nafta:'Nafta', gnc:'GNC', otro:'Otro'};
-const TIPOS_VENC = {vtv:'VTV', seguro:'Seguro', patente:'Patente', ruta:'RUTA', registro:'Registro del chofer', otro:'Otro'};
-const VENC_BASICOS_KM = ['vtv','seguro','registro'];        // si faltan, se avisa (las máquinas no tienen VTV ni registro)
+const TIPOS_VENC = {vtv:'VTV', seguro:'Seguro', matafuegos:'Matafuegos', patente:'Patente', ruta:'RUTA', registro:'Registro del chofer', otro:'Otro'};
+const VENC_BASICOS_KM = ['vtv','seguro','matafuegos','registro'];   // si faltan, se avisa (las máquinas no tienen VTV ni registro)
 const TIPOS_SERV = {service:'Service', reparacion:'Reparación', cubiertas:'Cubiertas', otro:'Otro'};
-const TIPOS_DOC = {poliza:'Póliza de seguro', vtv:'VTV', cedula:'Cédula', titulo:'Título', registro:'Registro', ruta:'RUTA', otro:'Otro'};
+const TIPOS_DOC = {poliza:'Póliza de seguro', vtv:'VTV', cedula:'Cédula', titulo:'Título', registro:'Registro', ruta:'RUTA', matafuegos:'Matafuegos', otro:'Otro'};
 const DESVIO_ALERTA = 0.15;                                 // 15 % peor que la referencia = alerta
 const DIAS_SIN_LECTURA = 30;                                // avisar si hace más de 30 días que no se actualiza el km
 const fmtPlata = n => n==null || n==='' ? '—' : '$ ' + Math.round(Number(n)).toLocaleString('es-AR');
@@ -87,7 +87,7 @@ const cargasDe = vid => F.cargas.filter(c=>c.vehiculo_id===vid);
 const servDe = vid => F.serv.filter(s=>s.vehiculo_id===vid).sort((a,b)=>String(b.fecha).localeCompare(String(a.fecha)) || b.km-a.km);
 const lectDe = vid => F.lect.filter(l=>l.vehiculo_id===vid);
 const docsDe = vid => F.docs.filter(d=>d.vehiculo_id===vid).sort((a,b)=>String(b.creado_en).localeCompare(String(a.creado_en)));
-const vencBasicos = v => U(v).horas ? ['seguro'] : VENC_BASICOS_KM;
+const vencBasicos = v => U(v).horas ? ['seguro','matafuegos'] : VENC_BASICOS_KM;
 
 // Fecha de alta del vehículo (si faltara, se toma hoy para no romper los cálculos)
 const fechaAlta = v => /^\d{4}-\d{2}-\d{2}/.test(String(v.creado_en||'')) ? String(v.creado_en).slice(0,10) : hoy();
@@ -456,7 +456,7 @@ function abrirForm(tipo, id, extra={}){
     body = `<div class="grid2">
       ${campo('Qué vence', `<select id="fe_tipo">${opts(TIPOS_VENC, t)}</select>`)}
       ${campo('Fecha de vencimiento', `<input id="fe_vence" type="date">`)}
-    </div>${campo('Detalle', `<input id="fe_det" value="${esc(prev?.detalle || '')}" placeholder="${t==='registro'?'Nombre del chofer y categoría':t==='seguro'?'Compañía y N° de póliza':'Opcional'}" autocomplete="off">`)}
+    </div>${campo('Detalle', `<input id="fe_det" value="${esc(prev?.detalle || '')}" placeholder="${t==='registro'?'Nombre del chofer y categoría':t==='seguro'?'Compañía y N° de póliza':t==='matafuegos'?'Ej. 5 kg ABC · N° de serie · empresa que lo recargó':'Opcional'}" autocomplete="off">`)}
     ${prev?`<p class="ayuda chica">El anterior vencía el ${fFecha(prev.vence)}. Queda en el historial.</p>`:''}${fotoInput('Foto o PDF del comprobante (opcional)')}`;
   }
   if(tipo==='doc'){
@@ -750,7 +750,7 @@ async function compartirPDF(btn, soloUno){
         {t: v.patente}, {t: [v.marca, v.modelo].filter(Boolean).join(' ')}, {t: `${v.chofer||'—'}\n${v.obra_id?nomUbic(v.obra_id):'Sin obra'}`},
         {t: `${fmtU(la.valor, v)}\n${la.dias<=0?'hoy':'hace '+la.dias+' d'}`, e: la.dias>DIAS_SIN_LECTURA?'amarillo':null},
         {t: `${fmtU(ps.km, v)}\n${ps.falta>0?'faltan '+fmtU(ps.falta, v):'PASADO'} · ${fFecha(ps.fecha)}`, e: ps.estado},
-        venc('vtv'), venc('seguro'), venc('registro'),
+        venc('vtv'), venc('seguro'), venc('matafuegos'), venc('registro'),
         {t: r.valor!=null ? `${fmtRend(r.valor, v)}${r.ref?`\nref. ${fmt(r.ref)}`:''}` : '—', e: r.estado==='gris'?null:r.estado}
       ];
       est[v.patente] = celdas.map(c=>c.e||null);
@@ -758,7 +758,7 @@ async function compartirPDF(btn, soloUno){
     });
     doc.autoTable({
       startY: 27,
-      head: [['Patente','Vehículo','Chofer / obra','Km / horas','Próximo service','VTV','Seguro','Registro','Consumo del mes']],
+      head: [['Patente','Vehículo','Chofer / obra','Km / horas','Próximo service','VTV','Seguro','Matafuegos','Registro','Consumo del mes']],
       body: filas, theme:'grid',
       styles:{fontSize:8, cellPadding:2, valign:'middle'},
       headStyles:{fillColor:[60,60,60], textColor:255, fontStyle:'bold'},
