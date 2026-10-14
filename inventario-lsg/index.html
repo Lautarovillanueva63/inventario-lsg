@@ -35,6 +35,7 @@
       <span id="estado" class="pill">Conectando</span>
       <span id="rolBadge" class="chip" hidden></span>
       <span id="quienSoy" class="muted"></span>
+      <button class="btn ghost sm" data-act="respaldo" id="btnRespaldo" hidden title="Descarga un Excel con todos los datos">Descargar respaldo</button>
       <button class="btn ghost sm" data-act="miClave">Cambiar contraseña</button>
       <button class="btn ghost sm" data-act="salir">Salir</button>
     </div>
@@ -90,7 +91,6 @@
 <datalist id="dlMat"></datalist>
 <datalist id="dlHerr"></datalist>
 <datalist id="dlProv"></datalist>
-<datalist id="dlRecibe"></datalist>
 
 <!-- ===================== NUEVO MOVIMIENTO ===================== -->
 <dialog id="dlgMov">
@@ -111,7 +111,6 @@
         <label id="wDestino"><span id="lDestino">Va a</span><select id="mDestino"></select></label>
         <label id="wProv"><span>Proveedor</span><input id="mProv" list="dlProv" autocomplete="off" placeholder="Ej. Corralón Sur"></label>
         <label id="wNumProv"><span>N° de remito del proveedor</span><input id="mNumProv" autocomplete="off" placeholder="Ej. 0003-00012345"></label>
-        <label id="wRecibe"><span>Recibe (capataz que firma)</span><input id="mRecibe" list="dlRecibe" autocomplete="off" placeholder="Nombre y apellido"></label>
         <label id="wEntrega"><span>Entrega</span><input id="mEntrega" autocomplete="off" placeholder="Opcional"></label>
         <label><span>Fecha</span><input type="date" id="mFecha"></label>
       </div>

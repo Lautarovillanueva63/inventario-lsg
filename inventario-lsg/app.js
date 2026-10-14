@@ -260,7 +260,7 @@ function renderDetalle(){
       <div><span class="u-tipo ${u.tipo}">${u.tipo==='deposito'?'Depósito':(u.activa===false?'Obra finalizada':'Obra')}</span>
         <h2>${esc(u.nombre)}</h2>
         ${u.direccion?`<p class="muted" style="margin:4px 0 0">${esc(u.direccion)}</p>`:''}
-        ${ultimo?`<p class="a-cargo">Último remito recibido por <strong>${esc(ultimo.recibe)}</strong> · ${numRemito(ultimo)} · ${fFecha(ultimo.fecha)}</p>`:''}
+        ${ultimo?`<p class="a-cargo">Último remito: <strong>${numRemito(ultimo)}</strong> · ${fFecha(ultimo.fecha)}${ultimo.recibe?` · recibió ${esc(ultimo.recibe)}`:''}</p>`:''}
       </div>
       <div class="det-actions">
       ${S.admin && u.activa!==false ? `
@@ -316,7 +316,7 @@ function tarjetaMov(m, loc){
   return `<button class="remito" data-mov="${esc(m.id)}">
     <span class="r-top"><span class="r-chips">${chipsMov(m)}</span><span class="mono muted">${fFecha(m.fecha)}</span></span>
     <span class="r-dir">${esc(descMov(m, loc))}</span>
-    ${m.tipo==='traslado'?`<span class="r-recibe">Recibe: ${esc(m.recibe)}</span>`:''}
+    ${m.tipo==='traslado' && m.recibe?`<span class="r-recibe">Recibe: ${esc(m.recibe)}</span>`:''}
     <span class="r-items">${esc(resumenItems(m.items))}</span>
   </button>`;
 }
@@ -360,7 +360,7 @@ function renderMov(){
     }else{
       const m = x.m;
       html += `<div class="mov click" data-mov="${esc(m.id)}" role="button" tabindex="0"><span class="hora">${hora}</span>
-        <span class="txt"><span class="r-chips">${chipsMov(m)}</span> ${esc(descMov(m))}${m.tipo==='traslado'?` · recibe ${esc(m.recibe)}`:''}</span>
+        <span class="txt"><span class="r-chips">${chipsMov(m)}</span> ${esc(descMov(m))}${m.tipo==='traslado' && m.recibe?` · recibe ${esc(m.recibe)}`:''}</span>
         <span class="antes">${esc(resumenItems(m.items))}</span>
         <span class="por">por ${esc(quien(m.creado_por))}</span></div>`;
     }
@@ -373,7 +373,6 @@ function renderDatalists(){
   $('#dlMat').innerHTML = uniq(S.mats.map(m=>m.nombre)).map(v=>`<option value="${esc(v)}">`).join('');
   $('#dlHerr').innerHTML = uniq(S.herr.map(h=>h.nombre.replace(/\s+\d+$/,''))).map(v=>`<option value="${esc(v)}">`).join('');
   $('#dlProv').innerHTML = uniq(S.movs.map(m=>m.proveedor)).map(v=>`<option value="${esc(v)}">`).join('');
-  $('#dlRecibe').innerHTML = uniq(S.movs.map(m=>m.recibe)).map(v=>`<option value="${esc(v)}">`).join('');
 }
 
 /* =====================================================================
@@ -408,7 +407,7 @@ function abrirMov({tipo='traslado', origen, destino, todo=false, nota=''}={}){
   document.querySelector(`input[name=mtipo][value=${tipo}]`).checked = true;
   opcionesUbic($('#mOrigen'), origen || S.sel);
   opcionesUbic($('#mDestino'), destino || S.sel);
-  ['#mProv','#mNumProv','#mRecibe','#mEntrega','#mNota','#mFiltroHerr'].forEach(s=>$(s).value='');
+  ['#mProv','#mNumProv','#mEntrega','#mNota','#mFiltroHerr'].forEach(s=>$(s).value='');
   $('#mFecha').value = hoy(); $('#mFoto').value = '';
   if(nota) $('#mNota').value = nota;
   $('#filasHerr').innerHTML = filaHerrHTML();
@@ -429,7 +428,7 @@ function aplicarTipo(){
   $('#wDestino').hidden = t==='consumo';
   $('#lDestino').textContent = t==='traslado' ? 'Va a' : 'Se carga en';
   $('#wProv').hidden = $('#wNumProv').hidden = $('#wFoto').hidden = t!=='proveedor';
-  $('#wRecibe').hidden = $('#wEntrega').hidden = t!=='traslado';
+  $('#wEntrega').hidden = t!=='traslado';
   $('#bHerrSel').hidden = $('#bMatSel').hidden = !usaOrigen(t);
   $('#bHerrNew').hidden = $('#bMatNew').hidden = usaOrigen(t);
   $('#lNota').textContent = t==='consumo' ? 'Motivo (ej. usado en la platea, se rompió, se perdió)' : 'Observaciones';
@@ -508,9 +507,8 @@ async function guardarMov(ev){
   }
   if(t==='traslado'){
     p.destino_id = $('#mDestino').value;
-    p.recibe = $('#mRecibe').value.trim(); p.entrega = $('#mEntrega').value.trim();
+    p.entrega = $('#mEntrega').value.trim();   // quien recibe firma a mano en el remito impreso (aclaración y DNI)
     if(p.destino_id===p.origen_id) return errorMov('El origen y el destino tienen que ser distintos.');
-    if(!p.recibe) return errorMov('Escribí quién recibe: es el capataz que va a firmar el remito.');
   }
   if(t==='proveedor'){ p.proveedor = $('#mProv').value.trim(); p.numero_proveedor = $('#mNumProv').value.trim(); }
   if(!p.herramientas.length && !p.materiales.length){
@@ -545,13 +543,13 @@ function abrirVer(id, soloRepintar, recienCreado){
   $('#vTitulo').textContent = m.tipo==='traslado' ? `Remito ${numRemito(m)}` : t.titulo;
   const herrs = (m.items||[]).filter(i=>i.clase==='herramienta'), mats = (m.items||[]).filter(i=>i.clase==='material');
   $('#vBody').innerHTML = `
-    ${recienCreado?`<p class="ok">Remito generado. Los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. Imprimilo para que lo firme ${esc(m.recibe)}.</p>`:''}
+    ${recienCreado?`<p class="ok">Remito generado. Los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. Imprimilo para que lo firme quien recibe.</p>`:''}
     <div class="r-top"><span class="r-chips">${chipsMov(m)}</span><span class="mono muted">${fFecha(m.fecha)}</span></div>
     <dl class="kv">
       ${m.origen_id?`<dt>Sale de</dt><dd>${esc(nomUbic(m.origen_id))}</dd>`:''}
       ${m.destino_id?`<dt>${m.tipo==='traslado'?'Va a':'Se cargó en'}</dt><dd>${esc(nomUbic(m.destino_id))}</dd>`:''}
       ${m.tipo==='proveedor'?`<dt>Proveedor</dt><dd>${esc(m.proveedor||'—')}</dd>${m.numero_proveedor?`<dt>N° remito prov.</dt><dd class="mono">${esc(m.numero_proveedor)}</dd>`:''}`:''}
-      ${m.tipo==='traslado'?`<dt>Recibe</dt><dd><strong>${esc(m.recibe)}</strong></dd>${m.entrega?`<dt>Entrega</dt><dd>${esc(m.entrega)}</dd>`:''}`:''}
+      ${m.tipo==='traslado'?`${m.recibe?`<dt>Recibe</dt><dd><strong>${esc(m.recibe)}</strong></dd>`:''}${m.entrega?`<dt>Entrega</dt><dd>${esc(m.entrega)}</dd>`:''}`:''}
       <dt>Registrado</dt><dd>por ${esc(quien(m.creado_por))}, ${fHora(m.creado_en)}</dd>
     </dl>
     ${herrs.length?`<div class="tabla-wrap"><table><thead><tr><th>Código</th><th>Herramienta</th></tr></thead><tbody>
@@ -876,7 +874,7 @@ function htmlInforme(u){
   const remitos = movs.filter(m=>m.tipo==='traslado');
   const filasR = remitos.map(m=>`<tr><td class="mono">${numRemito(m)}</td><td>${fFecha(m.fecha)}</td>
     <td>${m.destino_id===u.id?'Recibido de '+esc(nomUbic(m.origen_id)):'Enviado a '+esc(nomUbic(m.destino_id))}</td>
-    <td>${esc(m.recibe)}</td><td>${(m.fotos||[]).length?'Sí':'<strong>No</strong>'}</td></tr>`).join('');
+    <td>${esc(m.recibe) || 'A mano (ver foto)'}</td><td>${(m.fotos||[]).length?'Sí':'<strong>No</strong>'}</td></tr>`).join('');
   const provs = movs.filter(m=>m.tipo==='proveedor' || m.tipo==='alta');
   const filasP = provs.map(m=>`<tr><td>${fFecha(m.fecha)}</td><td>${m.tipo==='alta'?'Alta de inventario':esc(m.proveedor||'—')}</td>
     <td class="mono">${esc(m.numero_proveedor)}</td><td>${esc(resumenItems(m.items, 999))}</td></tr>`).join('');
@@ -940,6 +938,7 @@ document.addEventListener('click', async ev=>{
   const a = ev.target.closest('[data-act]'); if(!a) return;
   switch(a.dataset.act){
     case 'salir': await sb.auth.signOut(); break;
+    case 'respaldo': descargarRespaldo(a); break;
     case 'miClave':
       $('#fClave').reset(); $('#cError').hidden=true; $('#cOk').hidden=true; $('#cGuardar').disabled=false;
       $('#dlgClave').showModal(); $('#cNueva').focus(); break;
@@ -1001,6 +1000,52 @@ $('#buscaHerr').addEventListener('input', renderHerr);
 $('#buscaMov').addEventListener('input', renderMov);
 $('#filtroMov').addEventListener('change', renderMov);
 
+/* ---------- Respaldo: descarga TODOS los datos en un Excel (una hoja por tabla) ----------
+   El plan gratis de Supabase no guarda copias descargables, así que conviene bajar esto cada tanto
+   (por ejemplo, una vez por semana). Las fotos no van en el Excel: quedan en Supabase Storage. */
+const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+const TABLAS_RESPALDO = [
+  ['ubicaciones','Obras y depósitos'], ['herramientas','Herramientas'], ['materiales','Materiales'],
+  ['stock_materiales','Stock de materiales'], ['movimientos','Remitos y movimientos'], ['eventos','Eventos'],
+  ['vehiculos','Vehículos'], ['vencimientos','Vencimientos'], ['services_vehiculo','Services'],
+  ['cargas_combustible','Cargas de combustible'], ['lecturas_vehiculo','Lecturas km-horas'],
+  ['documentos_vehiculo','Documentos vehículos'], ['distancias_obra','Distancias de obras']
+];
+// Supabase devuelve como máximo 1000 filas por pedido: pedimos de a 1000 hasta traer todo
+async function leerTodo(tabla){
+  const filas = [];
+  for(let desde=0; ; desde+=1000){
+    const {data, error} = await sb.from(tabla).select('*').range(desde, desde+999);
+    if(error) return /does not exist|schema cache|Could not find/i.test(error.message||'') ? null : Promise.reject(error);
+    filas.push(...data);
+    if(data.length < 1000) return filas;
+  }
+}
+// Las celdas de Excel solo aceptan texto o números: las listas y objetos (ítems de un remito, fotos) van como texto
+const celda = x => x==null ? '' : Array.isArray(x) || typeof x==='object' ? JSON.stringify(x) : x;
+async function descargarRespaldo(btn){
+  const txt = btn.textContent; btn.disabled = true; btn.textContent = 'Armando respaldo…';
+  try{
+    if(!window.XLSX) await new Promise((ok, mal)=>{ const s = document.createElement('script'); s.src = XLSX_URL; s.onload = ok;
+      s.onerror = ()=>mal(new Error('No se pudo cargar el generador de Excel. Revisá la conexión.')); document.head.appendChild(s); });
+    const libro = XLSX.utils.book_new(), resumen = [['Hoja','Filas']];
+    for(const [tabla, nombre] of TABLAS_RESPALDO){
+      const filas = await leerTodo(tabla);
+      if(filas===null) continue;                      // tabla que todavía no existe (ej. sin vehiculos.sql)
+      const hoja = filas.length ? XLSX.utils.json_to_sheet(filas.map(f=>Object.fromEntries(Object.entries(f).map(([k,v])=>[k, celda(v)]))))
+                                : XLSX.utils.aoa_to_sheet([['(sin datos)']]);
+      XLSX.utils.book_append_sheet(libro, hoja, nombre.slice(0,31));
+      resumen.push([nombre, filas.length]);
+    }
+    resumen.push([], ['Generado', new Date().toLocaleString('es-AR')], ['Por', S.me||''], ['Las fotos no van en este archivo: quedan guardadas en Supabase (Storage → remitos).']);
+    XLSX.utils.book_append_sheet(libro, XLSX.utils.aoa_to_sheet(resumen), 'Resumen');
+    libro.SheetNames.unshift(libro.SheetNames.pop());  // "Resumen" como primera hoja
+    XLSX.writeFile(libro, `respaldo-inventario-lsg-${hoy()}.xlsx`);
+  }catch(e){
+    alert('No se pudo armar el respaldo: ' + (e.message || 'error de conexión') + '. Probá de nuevo.');
+  }finally{ btn.disabled = false; btn.textContent = txt; }
+}
+
 /* ---------- Cambiar contraseña: cada usuario cambia la suya ---------- */
 $('#fClave').addEventListener('submit', async ev=>{
   ev.preventDefault();
@@ -1037,6 +1082,7 @@ async function cargarRol(userId){
   b.className = 'chip ' + (S.admin ? 'c-tras' : 'c-compra');
   b.hidden = false;
   $('#btnUbic').hidden = !S.admin;
+  $('#btnRespaldo').hidden = !S.admin;
   window.flotaRender?.();
 }
 async function mostrarSesion(session){
