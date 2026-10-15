@@ -258,7 +258,8 @@ tr.baja td{color:var(--muted)}
   .rp-cli-fila{display:flex;justify-content:space-between;gap:12px}
   .rp-tabla{flex:1;position:relative;min-height:90mm}
   .rp-col{position:absolute;top:0;bottom:0;width:0;border-left:1px solid #999}
-  .rp-col.c1{left:16%} .rp-col.c2{left:32%}
+  .rp-col.c1{left:11%} .rp-col.c2{left:34%}
+  .rp-items td.mono{font-size:9pt;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .rp-items{width:100%;border-collapse:collapse;table-layout:fixed;position:relative}
   .rp-items th{background:#555;color:#fff;text-align:left;padding:3px 8px;font-weight:400;font-size:10pt;text-transform:none;letter-spacing:0}
   .rp-items td{padding:4px 8px;vertical-align:top;font-size:10pt;overflow-wrap:anywhere;border:0}
