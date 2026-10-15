@@ -719,14 +719,47 @@ const EMPRESA = {
 };
 const TITULOS = {traslado:'Remito interno', proveedor:'Ingreso de proveedor', alta:'Alta de inventario', consumo:'Consumo / baja'};
 
+// SOLO PARA EL PAPEL: las herramientas iguales se agrupan en una línea.
+// "BALDE DE ALBAÑIL 1" … "BALDE DE ALBAÑIL 5" (misma descripción) → 5 · BAL-005 a 009 · BALDE DE ALBAÑIL.
+// En el sistema cada una sigue siendo una unidad con su código; esto no cambia nada guardado.
+const nombreBase = n => String(n||'').replace(/\s*(n[°º]\s*)?#?\d+\s*$/i, '').trim() || String(n||'');
+function rangoCodigos(cods){
+  // Junta los códigos por prefijo y comprime los números seguidos: BAL-005, BAL-006, BAL-007 → "BAL-005 a 007"
+  const por = {};
+  for(const c of cods){ const mm = /^(.*?)(\d+)$/.exec(c||''); if(!mm){ (por[c] ??= []); continue; } (por[mm[1]] ??= []).push(mm[2]); }
+  return Object.entries(por).map(([pre, nums])=>{
+    if(!nums.length) return pre;
+    nums.sort((a,b)=>a-b);
+    const tramos = []; let ini = nums[0], ant = nums[0];
+    for(const n of nums.slice(1).concat([null])){
+      if(n!==null && Number(n)===Number(ant)+1){ ant = n; continue; }
+      tramos.push(ini===ant ? ini : Number(ant)===Number(ini)+1 ? `${ini}, ${ant}` : `${ini} a ${ant}`);
+      if(n!==null){ ini = ant = n; }
+    }
+    return pre + tramos.join(', ');
+  }).join(', ');
+}
+function agruparParaRemito(items, descDe){
+  const grupos = [], porClave = {};
+  for(const i of items){
+    if(i.clase!=='herramienta'){ grupos.push({cantidad:i.cantidad, unidad:i.unidad, codigos:'', nombre:i.nombre, desc:''}); continue; }
+    const base = nombreBase(i.nombre), desc = descDe(i), clave = (base+'|'+desc).toLowerCase();
+    const g = porClave[clave];
+    if(g){ g.cantidad += 1; g.cods.push(i.codigo); continue; }
+    grupos.push(porClave[clave] = {cantidad:1, unidad:'un', cods:[i.codigo], nombreOrig:i.nombre, base, desc});
+  }
+  // Si quedó una sola, se muestra con su nombre completo ("CANDADO 1"); si son varias, el nombre sin número
+  for(const g of grupos) if(g.cods){ g.codigos = g.cods.length===1 ? g.cods[0] : rangoCodigos(g.cods); g.nombre = g.cods.length===1 ? g.nombreOrig : g.base; }
+  return grupos;
+}
 function htmlComprobante(m, copia){
   const items = m.items||[];
   const nH = items.filter(i=>i.clase==='herramienta').length, nM = items.length - nH;
   const dest = ubicPor(m.destino_id), orig = ubicPor(m.origen_id);
   // La descripción (marca/modelo) sale de la foto del movimiento; si es un remito viejo, de la herramienta actual
   const descDe = i => i.clase!=='herramienta' ? '' : (i.descripcion ?? S.herr.find(h=>h.id===i.id)?.descripcion ?? '');
-  const filas = items.map(i=>`<tr><td class="num">${fmt(i.cantidad)} ${esc(i.unidad==='un'?'':i.unidad)}</td>
-    <td class="mono">${esc(i.clase==='herramienta'?i.codigo:'')}</td><td>${esc(i.nombre)}${descDe(i)?` <span class="rp-desc">— ${esc(descDe(i))}</span>`:''}</td></tr>`).join('');
+  const filas = agruparParaRemito(items, descDe).map(g=>`<tr><td class="num">${fmt(g.cantidad)} ${esc(g.unidad==='un'?'':g.unidad)}</td>
+    <td class="mono">${esc(g.codigos)}</td><td>${esc(g.nombre)}${g.desc?` <span class="rp-desc">— ${esc(g.desc)}</span>`:''}</td></tr>`).join('');
   return `<section class="rp">
     <header class="rp-top">
       <div class="rp-emp">
@@ -749,13 +782,13 @@ function htmlComprobante(m, copia){
     </div>
     <div class="rp-tabla"><span class="rp-col c1"></span><span class="rp-col c2"></span>
       <table class="rp-items">
-        <colgroup><col style="width:16%"><col style="width:16%"><col style="width:68%"></colgroup>
+        <colgroup><col style="width:11%"><col style="width:23%"><col style="width:66%"></colgroup>
         <thead><tr><th>Cantidad</th><th>Código</th><th>Descripción</th></tr></thead>
         <tbody>${filas}</tbody>
       </table>
     </div>
     <div class="rp-pie">
-      <div>Cantidad total: ${items.length} ${items.length===1?'ítem':'ítems'} (${nH} ${nH===1?'herramienta':'herramientas'}, ${nM} ${nM===1?'material':'materiales'})</div>
+      <div>Cantidad total: ${[nH?`${nH} ${nH===1?'herramienta':'herramientas'}`:'', nM?`${nM} ${nM===1?'material':'materiales'}`:''].filter(Boolean).join(' y ') || '—'}</div>
       <div>VPS: $ 0,00. Transporte: </div>
       <div class="rp-ref">${m.tipo==='proveedor'
         ? `PROVEEDOR: ${esc(m.proveedor)}${m.numero_proveedor?' — Remito N° '+esc(m.numero_proveedor):''}`
