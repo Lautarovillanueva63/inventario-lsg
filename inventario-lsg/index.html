@@ -14,7 +14,7 @@
 <!-- ===================== LOGIN ===================== -->
 <section id="vLogin" class="login" hidden>
   <form id="fLogin" class="login-card" novalidate>
-    <span class="mark">LSG</span>
+    <span class="logo-tile grande"><img src="logo-blanco.png" alt="LSG Obras de Ingeniería"></span>
     <h1>Inventario de obra</h1>
     <p class="muted">Ingresá con el usuario que te dio el administrador.</p>
     <label><span>Email</span><input type="email" id="lEmail" autocomplete="username" required></label>
@@ -28,7 +28,7 @@
 <div class="app" id="vApp" hidden>
   <header class="top">
     <div class="brand">
-      <span class="mark">LSG</span>
+      <span class="logo-tile"><img src="logo-blanco.png" alt="LSG Obras de Ingeniería"></span>
       <div><h1>Inventario de obra</h1><p class="sub">Herramientas y materiales por ubicación</p></div>
     </div>
     <div class="top-actions">
@@ -45,6 +45,7 @@
     <button class="tab on" data-tab="ubic" role="tab">Ubicaciones</button>
     <button class="tab" data-tab="herr" role="tab">Herramientas</button>
     <button class="tab" data-tab="mov" role="tab">Remitos y movimientos</button>
+    <button class="tab" data-tab="ped" role="tab">Pedidos</button>
     <button class="tab" data-tab="flota" role="tab">Vehículos</button>
   </nav>
 
@@ -60,9 +61,17 @@
 
     <!-- Buscador de herramientas -->
     <section id="vHerr" hidden>
-      <div class="mov-head"><h2>Herramientas y equipos</h2><input id="buscaHerr" type="search" placeholder="Buscar por código, nombre u obra" aria-label="Buscar herramientas"></div>
+      <div class="mov-head"><h2>Herramientas y equipos</h2>
+        <div class="filtros">
+          <select id="ubicHerr" aria-label="Filtrar por obra"><option value="">Todas las obras y depósitos</option></select>
+          <input id="buscaHerr" type="search" placeholder="Buscar por nombre, descripción o código" aria-label="Buscar herramientas">
+        </div>
+      </div>
       <div id="listaHerr"></div>
     </section>
+
+    <!-- Pedidos de materiales (pedidos.js) -->
+    <section id="vPed" hidden></section>
 
     <!-- Flota de vehículos (flota.js) -->
     <section id="vFlota" hidden></section>
@@ -75,6 +84,7 @@
           <select id="filtroMov" aria-label="Filtrar movimientos">
             <option value="todos">Todos</option>
             <option value="traslado">Remitos LSG (traslados)</option>
+            <option value="sin_remito">Movimientos sin remito</option>
             <option value="pendientes">Remitos sin firma</option>
             <option value="proveedor">Ingresos de proveedor</option>
             <option value="alta">Altas de inventario</option>
@@ -91,6 +101,7 @@
 <datalist id="dlMat"></datalist>
 <datalist id="dlHerr"></datalist>
 <datalist id="dlProv"></datalist>
+<datalist id="dlTransp"></datalist>
 
 <!-- ===================== NUEVO MOVIMIENTO ===================== -->
 <dialog id="dlgMov">
@@ -100,6 +111,7 @@
       <fieldset class="seg" id="mTipos">
         <legend>¿Qué querés hacer?</legend>
         <label><input type="radio" name="mtipo" value="traslado" id="mtTras"><span>Mover con remito</span></label>
+        <label><input type="radio" name="mtipo" value="sin_remito" id="mtSr"><span>Mover sin remito</span></label>
         <label><input type="radio" name="mtipo" value="proveedor" id="mtProv"><span>Ingreso de proveedor</span></label>
         <label><input type="radio" name="mtipo" value="alta" id="mtAlta"><span>Cargar lo que ya hay</span></label>
         <label><input type="radio" name="mtipo" value="consumo" id="mtCons"><span>Consumo o baja</span></label>
@@ -112,6 +124,7 @@
         <label id="wProv"><span>Proveedor</span><input id="mProv" list="dlProv" autocomplete="off" placeholder="Ej. Corralón Sur"></label>
         <label id="wNumProv"><span>N° de remito del proveedor</span><input id="mNumProv" autocomplete="off" placeholder="Ej. 0003-00012345"></label>
         <label id="wEntrega"><span>Entrega</span><input id="mEntrega" autocomplete="off" placeholder="Opcional"></label>
+        <label id="wTransp"><span>Transporte</span><input id="mTransp" list="dlTransp" autocomplete="off" placeholder="Quién lo lleva (opcional)"></label>
         <label><span>Fecha</span><input type="date" id="mFecha"></label>
       </div>
 
@@ -179,6 +192,14 @@
   <div class="d-foot" id="flFoot"></div>
 </div></dialog>
 
+<!-- ===================== PEDIDO DE MATERIALES (pedidos.js) ===================== -->
+<dialog id="dlgPed" class="ancho"><div class="dlg">
+  <div class="d-head"><h2 id="pTitulo">Pedido</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
+  <div class="d-body" id="pBody"></div>
+  <div class="d-foot" id="pFoot"></div>
+</div></dialog>
+<input type="file" id="pArchivos" accept="image/*,application/pdf" multiple hidden>
+
 <!-- ===================== FINALIZAR OBRA ===================== -->
 <dialog id="dlgFin"><div class="dlg">
   <div class="d-head"><h2 id="fTitulo2">Finalizar obra</h2><button type="button" class="x" data-close aria-label="Cerrar">×</button></div>
@@ -225,5 +246,6 @@
 <script src="config.js"></script>
 <script src="app.js"></script>
 <script src="flota.js"></script>
+<script src="pedidos.js"></script>
 </body>
 </html>

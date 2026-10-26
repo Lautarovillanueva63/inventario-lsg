@@ -96,7 +96,7 @@ create table if not exists movimientos (
   destino_id        uuid references ubicaciones(id),
   proveedor         text not null default '',
   numero_proveedor  text not null default '',
-  recibe            text not null default '',      -- capataz que firma
+  recibe            text not null default '',      -- capataz que firma (los remitos nuevos lo dejan vacío: se firma a mano)
   entrega           text not null default '',
   items             jsonb not null default '[]',   -- foto fija de lo que se movió
   fotos             text[] not null default '{}',
@@ -104,6 +104,15 @@ create table if not exists movimientos (
   creado_por        text,
   creado_en         timestamptz not null default now()
 );
+
+-- Agregados (octubre 2026):
+--  · "sin_remito": mueve igual que un traslado pero NO genera remito numerado ni pide firma
+--    (devoluciones al depósito, traslados internos que no necesitan papel).
+--  · transporte: quién lleva lo que se mueve (sale en el remito impreso).
+alter table movimientos add column if not exists transporte text not null default '';
+alter table movimientos drop constraint if exists movimientos_tipo_check;
+alter table movimientos add constraint movimientos_tipo_check
+  check (tipo in ('alta','proveedor','traslado','sin_remito','consumo'));
 
 -- Eventos: cambios que no son movimientos (alta de obra, cambio de nombre...)
 create table if not exists eventos (
@@ -165,21 +174,19 @@ begin
   end if;
   select email into v_email from perfiles where user_id = auth.uid();
 
-  if v_tipo is null or v_tipo not in ('alta','proveedor','traslado','consumo') then
+  if v_tipo is null or v_tipo not in ('alta','proveedor','traslado','sin_remito','consumo') then
     raise exception 'Tipo de movimiento inválido';
   end if;
-  if v_tipo in ('alta','proveedor','traslado') and v_destino is null then
+  if v_tipo in ('alta','proveedor','traslado','sin_remito') and v_destino is null then
     raise exception 'Elegí a dónde va';
   end if;
-  if v_tipo in ('traslado','consumo') and v_origen is null then
+  if v_tipo in ('traslado','sin_remito','consumo') and v_origen is null then
     raise exception 'Elegí de dónde sale';
   end if;
-  if v_tipo = 'traslado' and v_origen = v_destino then
+  if v_tipo in ('traslado','sin_remito') and v_origen = v_destino then
     raise exception 'El origen y el destino tienen que ser distintos';
   end if;
-  if v_tipo = 'traslado' and coalesce(trim(p->>'recibe'), '') = '' then
-    raise exception 'Escribí quién recibe (el capataz que firma el remito)';
-  end if;
+  -- Quien recibe ya no se escribe en el sistema: firma a mano en el remito impreso (aclaración y DNI).
 
   -- Herramientas -------------------------------------------------------
   for it in select value from jsonb_array_elements(coalesce(p->'herramientas', '[]'::jsonb)) loop
@@ -204,7 +211,7 @@ begin
       if h.ubicacion_id is distinct from v_origen then
         raise exception '% (%) ya no está en el origen elegido. Recargá la página.', h.nombre, h.codigo;
       end if;
-      if v_tipo = 'traslado' then
+      if v_tipo in ('traslado','sin_remito') then
         update herramientas set ubicacion_id = v_destino where id = h.id;
       else
         update herramientas set de_baja = true, ubicacion_id = null where id = h.id;
@@ -236,7 +243,7 @@ begin
       end if;
     end if;
 
-    if v_tipo in ('traslado','consumo') then
+    if v_tipo in ('traslado','sin_remito','consumo') then
       select cantidad into v_stock from stock_materiales
         where material_id = m.id and ubicacion_id = v_origen for update;
       if coalesce(v_stock, 0) < v_cant then
@@ -248,7 +255,7 @@ begin
         where material_id = m.id and ubicacion_id = v_origen and cantidad = 0;
     end if;
 
-    if v_tipo in ('alta','proveedor','traslado') then
+    if v_tipo in ('alta','proveedor','traslado','sin_remito') then
       insert into stock_materiales (material_id, ubicacion_id, cantidad)
       values (m.id, v_destino, v_cant)
       on conflict (material_id, ubicacion_id)
@@ -258,22 +265,31 @@ begin
     v_items := v_items || jsonb_build_object('clase','material','id',m.id,'nombre',m.nombre,'cantidad',v_cant,'unidad',m.unidad);
   end loop;
 
+  -- Equipos (máquinas y vehículos): solo figuran en el remito, no tocan el inventario.
+  -- Los usa trasladar_vehiculo (vehiculos.sql) para que el traslado de una máquina tenga remito numerado.
+  for it in select value from jsonb_array_elements(coalesce(p->'equipos', '[]'::jsonb)) loop
+    if v_tipo not in ('traslado','sin_remito') then raise exception 'Los equipos solo se pueden trasladar'; end if;
+    v_items := v_items || jsonb_build_object('clase','equipo','id',it->>'id','codigo',coalesce(it->>'codigo',''),
+      'nombre',coalesce(it->>'nombre',''),'descripcion',coalesce(it->>'descripcion',''),'cantidad',1,'unidad','un');
+  end loop;
+
   if jsonb_array_length(v_items) = 0 then
     raise exception 'Agregá al menos una herramienta o un material';
   end if;
 
   insert into movimientos (tipo, numero, fecha, origen_id, destino_id, proveedor, numero_proveedor,
-                           recibe, entrega, items, fotos, nota, creado_por)
+                           recibe, entrega, transporte, items, fotos, nota, creado_por)
   values (
     v_tipo,
     case when v_tipo = 'traslado' then nextval('numero_remito') end,
     coalesce(nullif(p->>'fecha', '')::date, current_date),
-    case when v_tipo in ('traslado','consumo') then v_origen end,
+    case when v_tipo in ('traslado','sin_remito','consumo') then v_origen end,
     case when v_tipo <> 'consumo' then v_destino end,
     coalesce(trim(p->>'proveedor'), ''),
     coalesce(trim(p->>'numero_proveedor'), ''),
     coalesce(trim(p->>'recibe'), ''),
     coalesce(trim(p->>'entrega'), ''),
+    coalesce(trim(p->>'transporte'), ''),
     v_items,
     array(select jsonb_array_elements_text(coalesce(p->'fotos', '[]'::jsonb))),
     coalesce(trim(p->>'nota'), ''),
@@ -315,6 +331,11 @@ drop policy if exists "leer herramientas"        on herramientas;
 drop policy if exists "admin renombra herramienta" on herramientas;
 create policy "leer herramientas"          on herramientas for select to authenticated using (true);
 create policy "admin renombra herramienta" on herramientas for update to authenticated using (es_admin()) with check (es_admin());
+-- El admin puede ELIMINAR una herramienta (por ejemplo, cargada por error). Se borra de verdad;
+-- los remitos viejos la siguen mostrando porque guardan una copia de lo que se movió.
+drop policy if exists "admin elimina herramienta" on herramientas;
+create policy "admin elimina herramienta" on herramientas for delete to authenticated using (es_admin());
+grant delete on herramientas to authenticated;
 -- De herramientas, el admin solo puede editar nombre y descripción a mano (no la ubicación):
 revoke update on herramientas from authenticated, anon;
 grant update (nombre, descripcion, foto) on herramientas to authenticated;
@@ -343,6 +364,123 @@ create policy "leer eventos"  on eventos for select to authenticated using (true
 create policy "admin eventos" on eventos for insert to authenticated with check (es_admin());
 
 
+-- 5b) PEDIDOS DE MATERIALES -------------------------------------------
+-- Ciclo: presupuesto (se arma y se puede editar) → en_espera (confirmado al proveedor)
+--        → parcial / recibido (llegó: se sube factura y remito y se carga el stock en la obra).
+-- El número es correlativo POR OBRA: el primer pedido de cada obra es el N° 01.
+create table if not exists pedidos (
+  id             uuid primary key default gen_random_uuid(),
+  obra_id        uuid not null references ubicaciones(id),
+  numero         int  not null,
+  fecha          date not null default current_date,         -- fecha de emisión del pedido
+  estado         text not null default 'presupuesto'
+                 check (estado in ('presupuesto','en_espera','parcial','recibido','anulado')),
+  -- Ítems: [{clase:'material'|'herramienta', descripcion, cantidad, unidad, observaciones,
+  --          recibido, proveedor, numero_remito, fecha_entrega}]
+  items          jsonb not null default '[]',
+  nota           text not null default '',
+  fotos          text[] not null default '{}',               -- facturas y remitos recibidos
+  movimientos    uuid[] not null default '{}',               -- ingresos de proveedor que generó
+  confirmado_en  timestamptz,
+  recibido_en    timestamptz,
+  creado_por     text,
+  creado_en      timestamptz not null default now(),
+  unique (obra_id, numero)
+);
+
+create or replace function numerar_pedido() returns trigger
+language plpgsql as $$
+begin
+  perform pg_advisory_xact_lock(hashtext('pedido-' || new.obra_id));
+  select coalesce(max(numero), 0) + 1 into new.numero from pedidos where obra_id = new.obra_id;
+  return new;
+end $$;
+drop trigger if exists numero_pedido on pedidos;
+create trigger numero_pedido before insert on pedidos for each row execute function numerar_pedido();
+
+-- Recibir un pedido (todo o nada): marca los ítems que llegaron y carga el stock en la obra con
+-- un "ingreso de proveedor" por cada proveedor/remito. Recibe:
+--   {id, fecha, fotos:[...], items:[{i (posición), proveedor, numero_remito, fecha_entrega}]}
+create or replace function recibir_pedido(p jsonb) returns pedidos
+language plpgsql security definer set search_path = public as $$
+declare
+  ped     pedidos;
+  v_items jsonb;
+  r       jsonb;
+  it      jsonb;
+  k       int;
+  grupo   record;
+  v_mov   movimientos;
+  v_movs  uuid[] := '{}';
+  v_fotos text[] := array(select jsonb_array_elements_text(coalesce(p->'fotos', '[]'::jsonb)));
+begin
+  if not es_admin() then raise exception 'Solo un administrador puede registrar la recepción'; end if;
+  select * into ped from pedidos where id = (p->>'id')::uuid for update;
+  if not found then raise exception 'El pedido ya no existe. Recargá la página.'; end if;
+  if ped.estado not in ('en_espera','parcial') then raise exception 'Primero confirmá el pedido'; end if;
+  if jsonb_array_length(coalesce(p->'items','[]'::jsonb)) = 0 then raise exception 'Tildá al menos un ítem que haya llegado'; end if;
+
+  v_items := ped.items;
+  -- 1) Marcar lo que llegó
+  for r in select value from jsonb_array_elements(p->'items') loop
+    k := (r->>'i')::int;
+    it := v_items->k;
+    if it is null then raise exception 'Un ítem del pedido no existe. Recargá la página.'; end if;
+    if coalesce((it->>'recibido')::boolean, false) then raise exception '"%" ya figura como recibido', it->>'descripcion'; end if;
+    if coalesce(trim(r->>'proveedor'), '') = '' then raise exception 'Falta el proveedor de "%"', it->>'descripcion'; end if;
+    v_items := jsonb_set(v_items, array[k::text], it || jsonb_build_object(
+      'recibido', true, 'proveedor', trim(r->>'proveedor'), 'numero_remito', coalesce(trim(r->>'numero_remito'), ''),
+      'fecha_entrega', coalesce(nullif(r->>'fecha_entrega', ''), p->>'fecha', current_date::text)));
+  end loop;
+
+  -- 2) Un ingreso de proveedor por cada proveedor + remito, con la factura y el remito adjuntos
+  for grupo in
+    select x->>'proveedor' as proveedor, x->>'numero_remito' as remito, max(x->>'fecha_entrega') as fecha,
+           jsonb_agg(x) as items
+      from jsonb_array_elements(p->'items') r2, lateral (select v_items->((r2->>'i')::int) as x) s
+     group by 1, 2
+  loop
+    v_mov := registrar_movimiento(jsonb_build_object(
+      'tipo', 'proveedor', 'destino_id', ped.obra_id, 'fecha', grupo.fecha,
+      'proveedor', grupo.proveedor, 'numero_proveedor', grupo.remito, 'fotos', to_jsonb(v_fotos),
+      'nota', 'Pedido N° ' || lpad(ped.numero::text, 2, '0'),
+      'herramientas', coalesce((select jsonb_agg(jsonb_build_object('nombre', g->>'descripcion', 'descripcion', '',
+                                  'cantidad', (g->>'cantidad')::numeric::int))
+                                  from jsonb_array_elements(grupo.items) g where g->>'clase' = 'herramienta'), '[]'::jsonb),
+      'materiales',   coalesce((select jsonb_agg(jsonb_build_object('nombre', g->>'descripcion', 'cantidad', g->>'cantidad',
+                                  'unidad', coalesce(nullif(g->>'unidad', ''), 'un')))
+                                  from jsonb_array_elements(grupo.items) g where g->>'clase' <> 'herramienta'), '[]'::jsonb)));
+    v_movs := v_movs || v_mov.id;
+  end loop;
+
+  update pedidos set
+    items = v_items,
+    fotos = fotos || v_fotos,
+    movimientos = movimientos || v_movs,
+    estado = case when exists (select 1 from jsonb_array_elements(v_items) x
+                                where not coalesce((x->>'recibido')::boolean, false)) then 'parcial' else 'recibido' end,
+    recibido_en = now()
+  where id = ped.id
+  returning * into ped;
+  return ped;
+end $$;
+revoke execute on function recibir_pedido(jsonb) from public, anon;
+grant execute on function recibir_pedido(jsonb) to authenticated;
+
+alter table pedidos enable row level security;
+drop policy if exists "leer pedidos"   on pedidos;
+drop policy if exists "admin crea pedido"   on pedidos;
+drop policy if exists "admin edita pedido"  on pedidos;
+drop policy if exists "admin borra pedido"  on pedidos;
+create policy "leer pedidos"       on pedidos for select to authenticated using (true);
+create policy "admin crea pedido"  on pedidos for insert to authenticated with check (es_admin() and estado = 'presupuesto');
+-- A mano solo se edita mientras es presupuesto o está en espera; la recepción va por recibir_pedido
+create policy "admin edita pedido" on pedidos for update to authenticated
+  using (es_admin() and estado in ('presupuesto','en_espera'))
+  with check (es_admin() and estado in ('presupuesto','en_espera','anulado'));
+create policy "admin borra pedido" on pedidos for delete to authenticated using (es_admin() and estado in ('presupuesto','anulado'));
+
+
 -- 6) FOTOS (Storage) ----------------------------------------------------
 insert into storage.buckets (id, name, public)
 values ('remitos', 'remitos', false)
@@ -360,7 +498,7 @@ create policy "admin sube fotos"  on storage.objects for insert to authenticated
 do $$
 declare t text;
 begin
-  foreach t in array array['ubicaciones','herramientas','materiales','stock_materiales','movimientos','eventos'] loop
+  foreach t in array array['ubicaciones','herramientas','materiales','stock_materiales','movimientos','eventos','pedidos'] loop
     begin
       execute format('alter publication supabase_realtime add table %I', t);
     exception when duplicate_object then null;

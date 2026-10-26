@@ -17,6 +17,8 @@ const UNIDADES = ['un','bolsa','kg','tn','m','m²','m³','l','barra','rollo','ca
 const TIPOS = {
   traslado:  {chip:'c-tras',   corto:'Remito',          titulo:'Mover con remito',      boton:'Generar remito',
               ayuda:'Los ítems cambian de ubicación al confirmar y se genera un remito numerado para imprimir y que lo firme el capataz.'},
+  sin_remito:{chip:'c-sr',     corto:'Sin remito',      titulo:'Mover sin remito',      boton:'Mover',
+              ayuda:'Los ítems cambian de ubicación pero NO se genera remito ni hace falta firma. Para devoluciones al depósito o traslados que no necesitan papel. Queda igual en el historial.'},
   proveedor: {chip:'c-prov',   corto:'Proveedor',       titulo:'Ingreso de proveedor',  boton:'Registrar ingreso',
               ayuda:'Lo que llega de un proveedor. Se suma al inventario del destino y queda adjunto el remito del proveedor.'},
   alta:      {chip:'c-alta',   corto:'Alta',            titulo:'Cargar lo que ya hay',  boton:'Cargar al inventario',
@@ -27,8 +29,8 @@ const TIPOS = {
 
 const S = {
   me:null, admin:false,
-  ubic:[], herr:[], mats:[], stock:[], movs:[], evs:[], loaded:{},
-  sel:null, tab:'ubic', verBajas:false,
+  ubic:[], herr:[], mats:[], stock:[], movs:[], evs:[], peds:[], loaded:{},
+  sel:null, tab:'ubic', verBajas:false, agrupar:false, agruparObra:false,
   urls:{}, vence:{}, firmando:{}, canal:null,
   mov:null, fotosNuevas:[], verId:null
 };
@@ -57,11 +59,16 @@ const TABLAS = {
   materiales:       ['mats',  () => sb.from('materiales').select('*')],
   stock_materiales: ['stock', () => sb.from('stock_materiales').select('*')],
   movimientos:      ['movs',  () => sb.from('movimientos').select('*').order('creado_en',{ascending:false}).limit(1000)],
-  eventos:          ['evs',   () => sb.from('eventos').select('*').order('en',{ascending:false}).limit(300)]
+  eventos:          ['evs',   () => sb.from('eventos').select('*').order('en',{ascending:false}).limit(300)],
+  pedidos:          ['peds',  () => sb.from('pedidos').select('*').order('creado_en',{ascending:false})]
 };
 async function cargar(tabla){
   const [clave, consulta] = TABLAS[tabla];
   const {data, error} = await consulta();
+  if(error && tabla==='pedidos' && /does not exist|schema cache|Could not find/i.test(error.message||'')){
+    // La página nueva se subió antes de correr supabase.sql: todo funciona menos Pedidos
+    S.faltaPedidos = true; S.loaded.pedidos = true; window.pedidosRender?.(); return;
+  }
   if(error){
     console.error('Error al leer', tabla, error);
     setEstado(/does not exist|schema cache/i.test(error.message||'') ? 'Falta correr supabase.sql' : 'Error de conexión','bad');
@@ -70,7 +77,8 @@ async function cargar(tabla){
   S[clave] = data; S.loaded[tabla] = true;
   render();
   if(tabla==='herramientas' || tabla==='materiales') firmarFotos();
-  if(tabla==='ubicaciones' && S.tab==='flota') window.flotaRender?.();
+  if((tabla==='ubicaciones' || tabla==='movimientos') && S.tab==='flota') window.flotaRender?.();
+  if(tabla==='pedidos' || tabla==='ubicaciones') window.pedidosRender?.();
 }
 async function cargarTodo(){
   await Promise.all(Object.keys(TABLAS).map(cargar));
@@ -216,7 +224,7 @@ function ordenUbic(a,b){
   return pa-pb || porNombre(a,b);
 }
 function resumenItems(items, max=6){
-  const txt = (items||[]).map(i => i.clase==='herramienta' ? `${i.codigo} ${i.nombre}` : `${fmt(i.cantidad)} ${i.unidad} ${i.nombre}`);
+  const txt = (items||[]).map(i => i.clase!=='material' ? `${i.codigo} ${i.nombre}`.trim() : `${fmt(i.cantidad)} ${i.unidad} ${i.nombre}`);
   return txt.length>max ? txt.slice(0,max).join(', ') + ` y ${txt.length-max} más` : txt.join(', ');
 }
 
@@ -254,6 +262,7 @@ function renderDetalle(){
   const herrs = herrEn(u.id), mats = matsEn(u.id), movs = movsDe(u.id);
   const ultimo = movs.find(m=>m.tipo==='traslado' && m.destino_id===u.id);
   const pend = movs.filter(m=>m.destino_id===u.id && sinFirma(m));
+  const dep = S.ubic.find(x=>x.tipo==='deposito' && x.activa!==false);
   firmar(movs.slice(0,20).flatMap(m=>(m.fotos||[]).slice(0,3)).filter(p=>!esPdf(p)));
   el.innerHTML = `<div class="det">
     <div class="det-head">
@@ -267,7 +276,9 @@ function renderDetalle(){
         <button class="btn primary sm" data-act="nuevoMov" data-tipo="traslado" ${herrs.length||mats.length?'':'disabled title="No hay nada para mover"'}>Mover con remito</button>
         <button class="btn sm" data-act="nuevoMov" data-tipo="alta">Cargar lo que ya hay</button>
         <button class="btn sm" data-act="nuevoMov" data-tipo="proveedor">Ingreso de proveedor</button>
-        <button class="btn sm" data-act="nuevoMov" data-tipo="consumo" ${herrs.length||mats.length?'':'disabled'}>Consumo o baja</button>` : ''}
+        <button class="btn sm" data-act="nuevoMov" data-tipo="consumo" ${herrs.length||mats.length?'':'disabled'}>Consumo o baja</button>
+        ${u.tipo==='obra' && dep ? `<button class="btn sm" data-act="sinRemitoDep" data-dep="${esc(dep.id)}" ${herrs.length||mats.length?'':'disabled'}>Volver al depósito sin remito</button>` : `<button class="btn sm" data-act="nuevoMov" data-tipo="sin_remito" ${herrs.length||mats.length?'':'disabled'}>Mover sin remito</button>`}
+        ${u.tipo==='obra' ? '<button class="btn sm" data-act="nuevoPedido">Pedido de materiales</button>' : ''}` : ''}
         <button class="btn sm" data-act="informe">Informe de ${u.tipo==='deposito'?'depósito':'obra'}</button>
         ${S.admin && u.tipo==='obra' && u.activa!==false ? '<button class="btn sm fin" data-act="finalizar">Finalizar obra</button>' : ''}
         ${S.admin ? `<button class="btn ghost sm" data-act="editarUbic">${u.activa===false?'Reabrir / editar':'Editar'}</button>` : ''}
@@ -276,22 +287,69 @@ function renderDetalle(){
     ${u.activa===false ? `<p class="aviso fin">Obra finalizada${fechaFinal(u)?` el ${fFecha(fechaFinal(u))}`:''}. Todo su historial queda guardado: usá <strong>Informe de obra</strong> para verlo o guardarlo en PDF.</p>` : ''}
     ${pend.length?`<p class="aviso">Falta cargar la foto firmada de ${pend.length===1?'1 remito':pend.length+' remitos'}: ${pend.map(m=>`<button class="link" data-mov="${esc(m.id)}">${numRemito(m)}</button>`).join(', ')}</p>`:''}
     <div class="seccion">
-      <h3>Herramientas y equipos (${herrs.length})</h3>
-      ${herrs.length?`<div class="tabla-wrap"><table><thead><tr><th class="col-foto"></th><th>Código</th><th>Herramienta</th><th>Descripción</th></tr></thead><tbody>
-        ${herrs.map(h=>`<tr class="click" data-herr="${esc(h.id)}" tabindex="0"><td class="col-foto">${miniatura(h.foto, h.nombre)}</td><td class="mono">${esc(h.codigo)}</td><td>${esc(h.nombre)}</td><td class="muted">${esc(h.descripcion)}</td></tr>`).join('')}
-      </tbody></table></div>`:`<div class="vacio">No hay herramientas acá.</div>`}
+      <div class="sec-head"><h3>Herramientas y equipos (${herrs.length})</h3>
+        ${herrs.length?`<div class="sec-tools"><input id="buscaObraHerr" type="search" placeholder="Buscar en esta ${u.tipo==='deposito'?'ubicación':'obra'}" aria-label="Buscar herramientas en esta ubicación" value="${esc(S.qObra||'')}">
+          <label class="check inline"><input type="checkbox" id="agruparObra" ${S.agruparObra?'checked':''}> Agrupar iguales</label></div>`:''}</div>
+      <div id="herrObra">${herrs.length?'':'<div class="vacio">No hay herramientas acá.</div>'}</div>
     </div>
+    ${window.flotaEnObra?.(u.id) || ''}
     <div class="seccion">
       <h3>Materiales (${mats.length})</h3>
       ${mats.length?`<div class="tabla-wrap"><table><thead><tr><th class="col-foto"></th><th>Material</th><th class="num">Cantidad</th><th>Unidad</th></tr></thead><tbody>
         ${mats.map(m=>`<tr class="click" data-mat="${esc(m.id)}" tabindex="0"><td class="col-foto">${miniatura(m.foto, m.nombre)}</td><td>${esc(m.nombre)}</td><td class="num">${fmt(m.cantidad)}</td><td>${esc(m.unidad)}</td></tr>`).join('')}
       </tbody></table></div>`:`<div class="vacio">No hay materiales acá.</div>`}
     </div>
+    ${window.pedidosDeObra?.(u.id) || ''}
     <div class="seccion">
       <h3>Movimientos (${movs.length})</h3>
       ${movs.length?`<div class="remitos">${movs.slice(0,25).map(m=>tarjetaMov(m,u.id)).join('')}</div>`:'<div class="vacio">Sin movimientos todavía.</div>'}
     </div>
   </div>`;
+  renderHerrObra();
+}
+
+/* ---------- Tablas de herramientas: normal o agrupadas (cuántas iguales hay) ----------
+   "Iguales" = mismo nombre sin el número del final y misma descripción:
+   BALDE DE ALBAÑIL 1 … BALDE DE ALBAÑIL 5 → un grupo de 5. */
+const textoHerr = h => norm(`${h.codigo} ${h.nombre} ${h.descripcion}`);
+function gruposHerr(lista){
+  const g = {};
+  for(const h of lista){
+    const base = nombreBase(h.nombre), k = norm(base + '|' + (h.descripcion||''));
+    (g[k] ??= {base, desc:h.descripcion||'', items:[]}).items.push(h);
+  }
+  return Object.values(g).sort((a,b)=>a.base.localeCompare(b.base,'es',{numeric:true}));
+}
+function accionesHerr(h){
+  return S.admin ? `<td class="acc"><button type="button" class="icono" data-act="editarHerr" data-id="${esc(h.id)}" title="Editar" aria-label="Editar ${esc(h.nombre)}">${ICONO.lapiz}</button>
+    <button type="button" class="icono peligro" data-act="borrarHerr" data-id="${esc(h.id)}" title="Eliminar" aria-label="Eliminar ${esc(h.nombre)}">${ICONO.tacho}</button></td>` : '';
+}
+function tablaHerr(lista, conDonde){
+  return `<div class="tabla-wrap"><table><thead><tr><th class="col-foto"></th><th>Código</th><th>Herramienta</th>${conDonde?'<th>Dónde está</th>':''}<th>Descripción</th>${S.admin?'<th class="acc"></th>':''}</tr></thead><tbody>
+    ${lista.map(h=>`<tr class="click ${h.de_baja?'baja':''}" data-herr="${esc(h.id)}" tabindex="0"><td class="col-foto">${miniatura(h.foto, h.nombre)}</td><td class="mono">${esc(h.codigo)}</td><td>${esc(h.nombre)}</td>
+      ${conDonde?`<td>${h.de_baja?'<span class="chip c-sale">De baja</span>':esc(nomUbic(h.ubicacion_id))}</td>`:''}<td class="muted">${esc(h.descripcion)}</td>${accionesHerr(h)}</tr>`).join('')}
+  </tbody></table></div>`;
+}
+function tablaGrupos(lista, conDonde){
+  const grupos = gruposHerr(lista);
+  return `<div class="tabla-wrap"><table><thead><tr><th class="col-foto"></th><th>Herramienta</th><th>Descripción</th><th class="num">Cantidad</th><th>Códigos</th>${conDonde?'<th>Dónde están</th>':''}</tr></thead><tbody>
+    ${grupos.map(g=>{
+      const donde = conDonde ? Object.entries(g.items.reduce((o,h)=>(o[h.de_baja?'De baja':nomUbic(h.ubicacion_id)]=(o[h.de_baja?'De baja':nomUbic(h.ubicacion_id)]||0)+1,o),{}))
+        .sort((a,b)=>b[1]-a[1]).map(([n,c])=>`<span class="donde-n"><strong>${c}</strong> ${esc(n)}</span>`).join(' ') : '';
+      const foto = g.items.find(h=>h.foto)?.foto;
+      return `<tr class="click" data-act="verGrupo" data-q="${esc(g.base)}" tabindex="0" title="Ver cada una"><td class="col-foto">${miniatura(foto, g.base)}</td><td><strong>${esc(g.base)}</strong></td><td class="muted">${esc(g.desc)}</td>
+        <td class="num"><span class="cant-grupo">${g.items.length}</span></td><td class="mono chica">${esc(rangoCodigos(g.items.map(h=>h.codigo)))}</td>${conDonde?`<td>${donde}</td>`:''}</tr>`; }).join('')}
+  </tbody></table></div>`;
+}
+// Herramientas de la obra elegida (se repinta sola al escribir en el buscador, sin perder el foco)
+function renderHerrObra(){
+  const el = $('#herrObra'), u = ubicPor(S.sel); if(!el || !u) return;
+  const todas = herrEn(u.id); if(!todas.length) return;
+  const q = norm(S.qObra||'');
+  const lista = todas.filter(h=>!q || textoHerr(h).includes(q));
+  const nGr = gruposHerr(lista).length;
+  el.innerHTML = (q ? `<p class="muted conteo">${lista.length ? `<strong>${lista.length}</strong> ${lista.length===1?'herramienta coincide':'herramientas coinciden'}${nGr>1?` (${nGr} tipos distintos)`:''}` : 'Sin resultados en esta ubicación.'}</p>` : '')
+    + (lista.length ? (S.agruparObra ? tablaGrupos(lista, false) : tablaHerr(lista, false)) : '');
 }
 
 function descMov(m, loc){
@@ -300,6 +358,10 @@ function descMov(m, loc){
       if(loc===m.origen_id) return `Salió hacia ${nomUbic(m.destino_id)}`;
       if(loc===m.destino_id) return `Llegó desde ${nomUbic(m.origen_id)}`;
       return `${nomUbic(m.origen_id)} → ${nomUbic(m.destino_id)}`;
+    case 'sin_remito':
+      if(loc===m.origen_id) return `Salió sin remito hacia ${nomUbic(m.destino_id)}`;
+      if(loc===m.destino_id) return `Llegó sin remito desde ${nomUbic(m.origen_id)}`;
+      return `${nomUbic(m.origen_id)} → ${nomUbic(m.destino_id)} (sin remito)`;
     case 'proveedor': return `Ingreso de ${m.proveedor || 'proveedor'}${loc ? '' : ' a ' + nomUbic(m.destino_id)}`;
     case 'alta':      return `Alta de inventario${loc ? '' : ' en ' + nomUbic(m.destino_id)}`;
     case 'consumo':   return `Consumo o baja${loc ? '' : ' en ' + nomUbic(m.origen_id)}`;
@@ -307,7 +369,7 @@ function descMov(m, loc){
   return '';
 }
 function chipsMov(m){
-  const t = TIPOS[m.tipo];
+  const t = TIPOS[m.tipo] || {chip:'', corto:m.tipo};
   let h = `<span class="chip ${t.chip}">${m.tipo==='traslado' ? numRemito(m) : t.corto}</span>`;
   if(m.tipo==='traslado') h += (m.fotos||[]).length ? '<span class="chip c-ok">Firmado</span>' : '<span class="chip c-pend">Sin firma</span>';
   return h;
@@ -324,17 +386,17 @@ function tarjetaMov(m, loc){
 function renderHerr(){
   const el = $('#listaHerr');
   if(!S.loaded.herramientas){ el.innerHTML='<div class="vacio">Cargando…</div>'; return; }
-  const q = norm($('#buscaHerr').value);
-  const todas = S.herr.filter(h=>S.verBajas || !h.de_baja).sort(porCodigo);
-  const lista = todas.filter(h=>!q || norm(`${h.codigo} ${h.nombre} ${h.descripcion} ${nomUbic(h.ubicacion_id)}`).includes(q));
-  const nBajas = S.herr.filter(h=>h.de_baja).length;
+  const q = norm($('#buscaHerr').value), ub = $('#ubicHerr').value;
+  const todas = S.herr.filter(h=>(S.verBajas || !h.de_baja) && (!ub || h.ubicacion_id===ub)).sort(porCodigo);
+  const lista = todas.filter(h=>!q || textoHerr(h).includes(q) || (!ub && norm(nomUbic(h.ubicacion_id)).includes(q)));
+  const nBajas = S.herr.filter(h=>h.de_baja && (!ub || h.ubicacion_id===ub)).length;
+  const nGr = gruposHerr(lista).length;
   el.innerHTML = `
-    <p class="muted conteo">${lista.length} de ${todas.length} ${todas.length===1?'herramienta':'herramientas'}
-      ${nBajas?` · <label class="check inline"><input type="checkbox" id="verBajas" ${S.verBajas?'checked':''}> Mostrar las ${nBajas} dadas de baja</label>`:''}</p>
-    ${lista.length?`<div class="tabla-wrap"><table><thead><tr><th class="col-foto"></th><th>Código</th><th>Herramienta</th><th>Dónde está</th><th>Descripción</th></tr></thead><tbody>
-      ${lista.map(h=>`<tr class="click ${h.de_baja?'baja':''}" data-herr="${esc(h.id)}" tabindex="0"><td class="col-foto">${miniatura(h.foto, h.nombre)}</td><td class="mono">${esc(h.codigo)}</td><td>${esc(h.nombre)}</td>
-        <td>${h.de_baja?'<span class="chip c-sale">De baja</span>':esc(nomUbic(h.ubicacion_id))}</td><td class="muted">${esc(h.descripcion)}</td></tr>`).join('')}
-    </tbody></table></div>`:`<div class="vacio"><strong>${q?'Sin resultados':'Sin herramientas todavía'}</strong>${q?'Probá con otra palabra.':(S.admin?'Cargalas desde una ubicación con "Cargar lo que ya hay".':'')}</div>`}`;
+    <p class="muted conteo"><strong>${lista.length}</strong> de ${todas.length} ${todas.length===1?'herramienta':'herramientas'}${ub?` en ${esc(nomUbic(ub))}`:''}${q && lista.length?` · ${nGr} ${nGr===1?'tipo':'tipos distintos'}`:''}
+      · <label class="check inline"><input type="checkbox" id="agrupar" ${S.agrupar?'checked':''}> Agrupar iguales (ver cuántas hay)</label>
+      ${nBajas && !ub?` · <label class="check inline"><input type="checkbox" id="verBajas" ${S.verBajas?'checked':''}> Mostrar las ${nBajas} dadas de baja</label>`:''}</p>
+    ${lista.length ? (S.agrupar ? tablaGrupos(lista, !ub) : tablaHerr(lista, !ub))
+      :`<div class="vacio"><strong>${q||ub?'Sin resultados':'Sin herramientas todavía'}</strong>${q||ub?'Probá con otra palabra u otra obra.':(S.admin?'Cargalas desde una ubicación con "Cargar lo que ya hay".':'')}</div>`}`;
 }
 
 function renderMov(){
@@ -372,7 +434,13 @@ function renderDatalists(){
   const uniq = arr => [...new Set(arr.filter(Boolean))].sort((a,b)=>a.localeCompare(b,'es'));
   $('#dlMat').innerHTML = uniq(S.mats.map(m=>m.nombre)).map(v=>`<option value="${esc(v)}">`).join('');
   $('#dlHerr').innerHTML = uniq(S.herr.map(h=>h.nombre.replace(/\s+\d+$/,''))).map(v=>`<option value="${esc(v)}">`).join('');
-  $('#dlProv').innerHTML = uniq(S.movs.map(m=>m.proveedor)).map(v=>`<option value="${esc(v)}">`).join('');
+  $('#dlProv').innerHTML = uniq([...S.movs.map(m=>m.proveedor), ...S.peds.flatMap(p=>(p.items||[]).map(i=>i.proveedor))]).map(v=>`<option value="${esc(v)}">`).join('');
+  $('#dlTransp').innerHTML = uniq(S.movs.map(m=>m.transporte)).map(v=>`<option value="${esc(v)}">`).join('');
+  // Filtro por obra de la solapa Herramientas (conserva lo elegido)
+  const sel = $('#ubicHerr'), val = sel.value;
+  sel.innerHTML = '<option value="">Todas las obras y depósitos</option>' + [...S.ubic].sort(ordenUbic)
+    .map(u=>`<option value="${esc(u.id)}">${esc(u.nombre)}${u.activa===false?' (finalizada)':''}</option>`).join('');
+  sel.value = S.ubic.some(u=>u.id===val) ? val : '';
 }
 
 /* =====================================================================
@@ -380,7 +448,8 @@ function renderDatalists(){
    ===================================================================== */
 const dlgM = $('#dlgMov');
 const tipoMov = () => document.querySelector('input[name=mtipo]:checked').value;
-const usaOrigen = t => t==='traslado' || t==='consumo';
+const usaOrigen = t => t==='traslado' || t==='sin_remito' || t==='consumo';
+const mueve = t => t==='traslado' || t==='sin_remito';     // tienen origen Y destino
 
 function opcionesUbic(sel, valor){
   sel.innerHTML = ubicActivas().map(u=>`<option value="${esc(u.id)}" ${u.id===valor?'selected':''}>${esc(u.nombre)}${u.tipo==='deposito'?' (depósito)':''}</option>`).join('');
@@ -407,7 +476,7 @@ function abrirMov({tipo='traslado', origen, destino, todo=false, nota=''}={}){
   document.querySelector(`input[name=mtipo][value=${tipo}]`).checked = true;
   opcionesUbic($('#mOrigen'), origen || S.sel);
   opcionesUbic($('#mDestino'), destino || S.sel);
-  ['#mProv','#mNumProv','#mEntrega','#mNota','#mFiltroHerr'].forEach(s=>$(s).value='');
+  ['#mProv','#mNumProv','#mEntrega','#mTransp','#mNota','#mFiltroHerr'].forEach(s=>$(s).value='');
   $('#mFecha').value = hoy(); $('#mFoto').value = '';
   if(nota) $('#mNota').value = nota;
   $('#filasHerr').innerHTML = filaHerrHTML();
@@ -426,14 +495,14 @@ function aplicarTipo(){
   $('#mGuardar').textContent = info.boton;
   $('#wOrigen').hidden = !usaOrigen(t);
   $('#wDestino').hidden = t==='consumo';
-  $('#lDestino').textContent = t==='traslado' ? 'Va a' : 'Se carga en';
+  $('#lDestino').textContent = mueve(t) ? 'Va a' : 'Se carga en';
   $('#wProv').hidden = $('#wNumProv').hidden = $('#wFoto').hidden = t!=='proveedor';
-  $('#wEntrega').hidden = t!=='traslado';
+  $('#wEntrega').hidden = $('#wTransp').hidden = t!=='traslado';
   $('#bHerrSel').hidden = $('#bMatSel').hidden = !usaOrigen(t);
   $('#bHerrNew').hidden = $('#bMatNew').hidden = usaOrigen(t);
   $('#lNota').textContent = t==='consumo' ? 'Motivo (ej. usado en la platea, se rompió, se perdió)' : 'Observaciones';
   $('#lHerrSel').textContent = t==='consumo' ? 'Herramientas a dar de baja' : 'Herramientas a mover';
-  if(t==='traslado' && $('#mDestino').value===$('#mOrigen').value){
+  if(mueve(t) && $('#mDestino').value===$('#mOrigen').value){
     const otra = ubicActivas().find(u=>u.id!==$('#mOrigen').value);
     if(otra) $('#mDestino').value = otra.id;
   }
@@ -505,9 +574,9 @@ async function guardarMov(ev){
       p.materiales.push({nombre, cantidad, unidad});
     }
   }
-  if(t==='traslado'){
+  if(mueve(t)){
     p.destino_id = $('#mDestino').value;
-    p.entrega = $('#mEntrega').value.trim();   // quien recibe firma a mano en el remito impreso (aclaración y DNI)
+    if(t==='traslado'){ p.entrega = $('#mEntrega').value.trim(); p.transporte = $('#mTransp').value.trim(); }  // quien recibe firma a mano en el papel
     if(p.destino_id===p.origen_id) return errorMov('El origen y el destino tienen que ser distintos.');
   }
   if(t==='proveedor'){ p.proveedor = $('#mProv').value.trim(); p.numero_proveedor = $('#mNumProv').value.trim(); }
@@ -526,7 +595,7 @@ async function guardarMov(ev){
     S.fotosNuevas.forEach(f=>URL.revokeObjectURL(f.url)); S.fotosNuevas = [];
     dlgM.close();
     await Promise.all(['herramientas','materiales','stock_materiales','movimientos'].map(cargar));
-    if(t==='traslado') abrirVer(data.id, false, true);
+    if(mueve(t)) abrirVer(data.id, false, true);
   }catch(e){
     btn.disabled = false; btn.textContent = TIPOS[t].boton;
     errorMov(e.message || 'No se pudo guardar. Revisá la conexión y probá de nuevo.');
@@ -540,20 +609,23 @@ function abrirVer(id, soloRepintar, recienCreado){
   S.verId = id;
   firmar(m.fotos||[]);
   const t = TIPOS[m.tipo];
-  $('#vTitulo').textContent = m.tipo==='traslado' ? `Remito ${numRemito(m)}` : t.titulo;
-  const herrs = (m.items||[]).filter(i=>i.clase==='herramienta'), mats = (m.items||[]).filter(i=>i.clase==='material');
+  $('#vTitulo').textContent = m.tipo==='traslado' ? `Remito ${numRemito(m)}` : m.tipo==='sin_remito' ? 'Movimiento sin remito' : t.titulo;
+  const herrs = (m.items||[]).filter(i=>i.clase!=='material'), mats = (m.items||[]).filter(i=>i.clase==='material');
   $('#vBody').innerHTML = `
-    ${recienCreado?`<p class="ok">Remito generado. Los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. Imprimilo para que lo firme quien recibe.</p>`:''}
+    ${recienCreado?`<p class="ok">${m.tipo==='traslado'
+      ? `Remito generado. Los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. Imprimilo para que lo firme quien recibe.`
+      : `Listo: los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. No se generó remito ni hace falta firma.`}</p>`:''}
     <div class="r-top"><span class="r-chips">${chipsMov(m)}</span><span class="mono muted">${fFecha(m.fecha)}</span></div>
     <dl class="kv">
       ${m.origen_id?`<dt>Sale de</dt><dd>${esc(nomUbic(m.origen_id))}</dd>`:''}
-      ${m.destino_id?`<dt>${m.tipo==='traslado'?'Va a':'Se cargó en'}</dt><dd>${esc(nomUbic(m.destino_id))}</dd>`:''}
+      ${m.destino_id?`<dt>${mueve(m.tipo)?'Va a':'Se cargó en'}</dt><dd>${esc(nomUbic(m.destino_id))}</dd>`:''}
       ${m.tipo==='proveedor'?`<dt>Proveedor</dt><dd>${esc(m.proveedor||'—')}</dd>${m.numero_proveedor?`<dt>N° remito prov.</dt><dd class="mono">${esc(m.numero_proveedor)}</dd>`:''}`:''}
       ${m.tipo==='traslado'?`${m.recibe?`<dt>Recibe</dt><dd><strong>${esc(m.recibe)}</strong></dd>`:''}${m.entrega?`<dt>Entrega</dt><dd>${esc(m.entrega)}</dd>`:''}`:''}
+      ${m.transporte?`<dt>Transporte</dt><dd>${esc(m.transporte)}</dd>`:''}
       <dt>Registrado</dt><dd>por ${esc(quien(m.creado_por))}, ${fHora(m.creado_en)}</dd>
     </dl>
     ${herrs.length?`<div class="tabla-wrap"><table><thead><tr><th>Código</th><th>Herramienta</th></tr></thead><tbody>
-      ${herrs.map(i=>`<tr><td class="mono">${esc(i.codigo)}</td><td>${esc(i.nombre)}</td></tr>`).join('')}</tbody></table></div>`:''}
+      ${herrs.map(i=>`<tr><td class="mono">${esc(i.codigo)}</td><td>${esc(i.nombre)}${i.clase==='equipo'?' <span class="chip c-alta">Equipo</span>':''}</td></tr>`).join('')}</tbody></table></div>`:''}
     ${mats.length?`<div class="tabla-wrap"><table><thead><tr><th>Material</th><th class="num">Cantidad</th><th>Unidad</th></tr></thead><tbody>
       ${mats.map(i=>`<tr><td>${esc(i.nombre)}</td><td class="num">${fmt(i.cantidad)}</td><td>${esc(i.unidad)}</td></tr>`).join('')}</tbody></table></div>`:''}
     ${m.nota?`<p style="margin:0"><span class="lbl">${m.tipo==='consumo'?'Motivo':'Observaciones'}</span>${esc(m.nota)}</p>`:''}
@@ -612,9 +684,27 @@ function abrirHerr(id){
       ${hist.length?`<div class="remitos">${hist.map(m=>tarjetaMov(m)).join('')}</div>`:'<div class="vacio chico">Sin movimientos.</div>'}</div>`;
   if(borrador){ $('#hNombre').value = borrador.n; $('#hDesc').value = borrador.d; }
   $('#hFoot').innerHTML = S.admin
-    ? `<button type="button" class="btn" data-close>Cerrar</button><button type="button" class="btn primary" data-act="guardarHerr">Guardar cambios</button>`
+    ? `<button type="button" class="btn danger" data-act="borrarHerr" data-id="${esc(h.id)}" style="margin-right:auto">Eliminar</button>
+       <button type="button" class="btn" data-close>Cerrar</button><button type="button" class="btn primary" data-act="guardarHerr">Guardar cambios</button>`
     : `<button type="button" class="btn primary" data-close>Cerrar</button>`;
   if(!dlgH.open) dlgH.showModal();
+}
+// Eliminar de verdad (por ejemplo, una herramienta cargada por error). Pide tocar dos veces.
+// Los remitos viejos la siguen mostrando: guardan una copia de lo que se movió.
+async function borrarHerr(btn){
+  const h = S.herr.find(x=>x.id===btn.dataset.id); if(!h) return;
+  if(btn.dataset.ok!=='1'){
+    btn.dataset.ok = '1'; btn.classList.add('confirmar');
+    if(btn.classList.contains('icono')) btn.textContent = '¿Borrar?'; else btn.textContent = `¿Eliminar ${h.codigo} para siempre?`;
+    setTimeout(()=>{ if(btn.isConnected && btn.dataset.ok==='1'){ btn.dataset.ok=''; btn.classList.remove('confirmar'); btn.innerHTML = btn.classList.contains('icono') ? ICONO.tacho : 'Eliminar'; } }, 4000);
+    return;
+  }
+  btn.disabled = true;
+  const {error} = await sb.from('herramientas').delete().eq('id', h.id);
+  if(error){ btn.disabled = false; alert('No se pudo eliminar. ' + (/permission|policy|denied/i.test(error.message) ? 'Falta correr el supabase.sql nuevo.' : 'Probá de nuevo.')); return; }
+  if(dlgH.open && herrAbierta===h.id) dlgH.close();
+  S.herr = S.herr.filter(x=>x.id!==h.id); render();
+  cargar('herramientas');
 }
 async function guardarHerr(){
   const h = S.herr.find(x=>x.id===herrAbierta); if(!h) return;
@@ -717,7 +807,7 @@ const EMPRESA = {
   letra:      '',                          // en blanco. "R" es el remito fiscal (Cód. 91): consultá con el contador antes de usarla
   leyendaLetra: ''                         // texto chico debajo del recuadro de la letra (vacío = no se muestra)
 };
-const TITULOS = {traslado:'Remito interno', proveedor:'Ingreso de proveedor', alta:'Alta de inventario', consumo:'Consumo / baja'};
+const TITULOS = {traslado:'Remito interno', sin_remito:'Movimiento interno', proveedor:'Ingreso de proveedor', alta:'Alta de inventario', consumo:'Consumo / baja'};
 
 // SOLO PARA EL PAPEL: las herramientas iguales se agrupan en una línea.
 // "BALDE DE ALBAÑIL 1" … "BALDE DE ALBAÑIL 5" (misma descripción) → 5 · BAL-005 a 009 · BALDE DE ALBAÑIL.
@@ -742,6 +832,7 @@ function rangoCodigos(cods){
 function agruparParaRemito(items, descDe){
   const grupos = [], porClave = {};
   for(const i of items){
+    if(i.clase==='equipo'){ grupos.push({cantidad:1, unidad:'un', codigos:i.codigo||'', nombre:i.nombre, desc:i.descripcion||''}); continue; }
     if(i.clase!=='herramienta'){ grupos.push({cantidad:i.cantidad, unidad:i.unidad, codigos:'', nombre:i.nombre, desc:''}); continue; }
     const base = nombreBase(i.nombre), desc = descDe(i), clave = (base+'|'+desc).toLowerCase();
     const g = porClave[clave];
@@ -754,7 +845,7 @@ function agruparParaRemito(items, descDe){
 }
 function htmlComprobante(m, copia){
   const items = m.items||[];
-  const nH = items.filter(i=>i.clase==='herramienta').length, nM = items.length - nH;
+  const nH = items.filter(i=>i.clase==='herramienta').length, nE = items.filter(i=>i.clase==='equipo').length, nM = items.length - nH - nE;
   const dest = ubicPor(m.destino_id), orig = ubicPor(m.origen_id);
   // La descripción (marca/modelo) sale de la foto del movimiento; si es un remito viejo, de la herramienta actual
   const descDe = i => i.clase!=='herramienta' ? '' : (i.descripcion ?? S.herr.find(h=>h.id===i.id)?.descripcion ?? '');
@@ -776,9 +867,9 @@ function htmlComprobante(m, copia){
     </header>
     <div class="rp-cli">
       <div>Razón social: ${EMPRESA.codigo} ${EMPRESA.razon}</div>
-      <div>Domicilio: ${esc(dest?.direccion || orig?.direccion || '')}</div>
+      <div>Domicilio: ${esc(m.destino_id ? (dest?.direccion||'') : (orig?.direccion||''))}</div>
       <div>Ubicación: ${esc(dest?.nombre || orig?.nombre || EMPRESA.ubicacion)}</div>
-      <div class="rp-cli-fila"><span>Condición de venta: ${m.tipo==='traslado'?'Traslado interno':''}</span><span>Condición de IVA: Consumidor final</span></div>
+      <div class="rp-cli-fila"><span>Condición de venta: ${mueve(m.tipo)?'Traslado interno':''}</span><span>Condición de IVA: Consumidor final</span></div>
     </div>
     <div class="rp-tabla"><span class="rp-col c1"></span><span class="rp-col c2"></span>
       <table class="rp-items">
@@ -788,8 +879,8 @@ function htmlComprobante(m, copia){
       </table>
     </div>
     <div class="rp-pie">
-      <div>Cantidad total: ${[nH?`${nH} ${nH===1?'herramienta':'herramientas'}`:'', nM?`${nM} ${nM===1?'material':'materiales'}`:''].filter(Boolean).join(' y ') || '—'}</div>
-      <div>VPS: $ 0,00. Transporte: </div>
+      <div>Cantidad total: ${[nE?`${nE} ${nE===1?'equipo':'equipos'}`:'', nH?`${nH} ${nH===1?'herramienta':'herramientas'}`:'', nM?`${nM} ${nM===1?'material':'materiales'}`:''].filter(Boolean).join(' y ') || '—'}</div>
+      <div>VPS: $ 0,00. Transporte: ${esc(m.transporte||'')}</div>
       <div class="rp-ref">${m.tipo==='proveedor'
         ? `PROVEEDOR: ${esc(m.proveedor)}${m.numero_proveedor?' — Remito N° '+esc(m.numero_proveedor):''}`
         : `ORIGEN: ${esc(orig?.nombre || '')}`}</div>
@@ -842,7 +933,8 @@ function abrirFinalizar(){
       <p class="muted">Podés devolver todo al depósito con un remito (queda todo tildado; revisalo antes de confirmar), o mover cada cosa a otra obra. Los materiales que se usaron se descuentan con <strong>Consumo o baja</strong>.</p>`;
     $('#fFoot').innerHTML = `<button type="button" class="btn" data-close>Cancelar</button>
       ${mats.length?'<button type="button" class="btn" data-act="consumoTodo">Registrar consumo</button>':''}
-      ${dep?`<button type="button" class="btn primary" data-act="devolverTodo" data-dep="${esc(dep.id)}">Devolver todo a ${esc(dep.nombre)}</button>`:''}`;
+      ${dep?`<button type="button" class="btn" data-act="devolverTodoSr" data-dep="${esc(dep.id)}">Devolver todo sin remito</button>
+      <button type="button" class="btn primary" data-act="devolverTodo" data-dep="${esc(dep.id)}">Devolver todo a ${esc(dep.nombre)}</button>`:''}`;
   }else{
     $('#fBody').innerHTML = `
       <p>La obra está vacía. Al finalizarla:</p>
@@ -875,6 +967,7 @@ function htmlInforme(u){
   const movs = movsDe(u.id).slice().sort((a,b)=>String(a.creado_en).localeCompare(String(b.creado_en)));
   const ref = (m, lado) => {
     if(m.tipo==='traslado') return lado==='in' ? `${numRemito(m)} desde ${nomUbic(m.origen_id)}` : `${numRemito(m)} a ${nomUbic(m.destino_id)}`;
+    if(m.tipo==='sin_remito') return lado==='in' ? `Sin remito desde ${nomUbic(m.origen_id)}` : `Sin remito a ${nomUbic(m.destino_id)}`;
     if(m.tipo==='proveedor') return `Ingreso de ${m.proveedor||'proveedor'}${m.numero_proveedor?' (rem. '+m.numero_proveedor+')':''}`;
     if(m.tipo==='alta') return 'Alta de inventario';
     return 'Baja' + (m.nota ? `: ${m.nota}` : '');
@@ -952,16 +1045,26 @@ function imprimirInforme(id){
    ===================================================================== */
 document.addEventListener('click', async ev=>{
   const c = ev.target.closest('[data-close]'); if(c){ c.closest('dialog').close(); return; }
+  // Botones dentro de una fila de herramienta: van antes que el clic de la fila
+  const accH = ev.target.closest('[data-act="borrarHerr"],[data-act="editarHerr"]');
+  if(accH){ accH.dataset.act==='borrarHerr' ? borrarHerr(accH) : abrirHerr(accH.dataset.id); return; }
+  const grp = ev.target.closest('[data-act="verGrupo"]');
+  if(grp){
+    if(grp.closest('#herrObra')){ S.agruparObra = false; S.qObra = grp.dataset.q; renderDetalle(); }
+    else { S.agrupar = false; $('#buscaHerr').value = grp.dataset.q; renderHerr(); }
+    return;
+  }
   const tab = ev.target.closest('[data-tab]');
   if(tab){
     S.tab = tab.dataset.tab;
     $$('.tab').forEach(t=>t.classList.toggle('on', t===tab));
-    $('#vUbic').hidden = S.tab!=='ubic'; $('#vHerr').hidden = S.tab!=='herr'; $('#vMov').hidden = S.tab!=='mov'; $('#vFlota').hidden = S.tab!=='flota';
+    $('#vUbic').hidden = S.tab!=='ubic'; $('#vHerr').hidden = S.tab!=='herr'; $('#vMov').hidden = S.tab!=='mov'; $('#vFlota').hidden = S.tab!=='flota'; $('#vPed').hidden = S.tab!=='ped';
     if(S.tab==='flota') window.flotaRender?.();
+    if(S.tab==='ped') window.pedidosRender?.();
     return;
   }
   const ub = ev.target.closest('[data-ubic]');
-  if(ub){ S.sel=ub.dataset.ubic; guardarSel(); render(); if(innerWidth<880) $('#detalle').scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  if(ub){ if(S.sel!==ub.dataset.ubic) S.qObra=''; S.sel=ub.dataset.ubic; guardarSel(); render(); if(innerWidth<880) $('#detalle').scrollIntoView({behavior:'smooth',block:'start'}); return; }
   const hr = ev.target.closest('[data-herr]');
   if(hr){ if(dlgV.open) dlgV.close(); abrirHerr(hr.dataset.herr); return; }
   const mt = ev.target.closest('[data-mat]');
@@ -982,6 +1085,9 @@ document.addEventListener('click', async ev=>{
     case 'finalizar': abrirFinalizar(); break;
     case 'confirmarFin': confirmarFinalizar(a); break;
     case 'devolverTodo': dlgF.close(); abrirMov({tipo:'traslado', origen:S.sel, destino:a.dataset.dep, todo:true, nota:'Devolución por cierre de obra'}); break;
+    case 'devolverTodoSr': dlgF.close(); abrirMov({tipo:'sin_remito', origen:S.sel, destino:a.dataset.dep, todo:true, nota:'Devolución por cierre de obra'}); break;
+    case 'sinRemitoDep': abrirMov({tipo:'sin_remito', origen:S.sel, destino:a.dataset.dep, nota:'Devolución al depósito'}); break;
+    case 'nuevoPedido': window.abrirPedido?.(null, S.sel); break;
     case 'consumoTodo': dlgF.close(); abrirMov({tipo:'consumo', origen:S.sel, nota:'Consumido en obra'}); break;
     case 'filaHerr': $('#filasHerr').insertAdjacentHTML('beforeend', filaHerrHTML()); $('#filasHerr .fh:last-child .hn').focus(); break;
     case 'filaMat':  $('#filasMat').insertAdjacentHTML('beforeend', filaMatHTML());  $('#filasMat .fm:last-child .mn').focus(); break;
@@ -1005,11 +1111,15 @@ document.addEventListener('click', async ev=>{
 document.addEventListener('keydown', ev=>{
   if(ev.key!=='Enter') return;
   if(ev.target.matches('[data-mov][tabindex]')) abrirVer(ev.target.dataset.mov);
+  if(ev.target.matches('tr[data-act="verGrupo"]')) ev.target.click();
   if(ev.target.matches('tr[data-herr]')) abrirHerr(ev.target.dataset.herr);
   if(ev.target.matches('tr[data-mat]')) abrirMat(ev.target.dataset.mat);
 });
 document.addEventListener('change', ev=>{
   if(ev.target.id==='verBajas'){ S.verBajas = ev.target.checked; renderHerr(); }
+  if(ev.target.id==='agrupar'){ S.agrupar = ev.target.checked; renderHerr(); }
+  if(ev.target.id==='agruparObra'){ S.agruparObra = ev.target.checked; renderHerrObra(); }
+  if(ev.target.id==='ubicHerr') renderHerr();
 });
 $$('input[name=mtipo]').forEach(r=>r.addEventListener('change', ()=>{ S.mov.sel.clear(); S.mov.qty={}; aplicarTipo(); }));
 $('#mOrigen').addEventListener('change', ()=>{ S.mov.sel.clear(); S.mov.qty={}; aplicarTipo(); });
@@ -1030,6 +1140,7 @@ $('#dlgFoto').addEventListener('click', ()=>$('#dlgFoto').close());
 $('#fMov').addEventListener('submit', guardarMov);
 $('#fUbic').addEventListener('submit', guardarUbic);
 $('#buscaHerr').addEventListener('input', renderHerr);
+document.addEventListener('input', ev=>{ if(ev.target.id==='buscaObraHerr'){ S.qObra = ev.target.value; renderHerrObra(); } });
 $('#buscaMov').addEventListener('input', renderMov);
 $('#filtroMov').addEventListener('change', renderMov);
 
@@ -1042,7 +1153,8 @@ const TABLAS_RESPALDO = [
   ['stock_materiales','Stock de materiales'], ['movimientos','Remitos y movimientos'], ['eventos','Eventos'],
   ['vehiculos','Vehículos'], ['vencimientos','Vencimientos'], ['services_vehiculo','Services'],
   ['cargas_combustible','Cargas de combustible'], ['lecturas_vehiculo','Lecturas km-horas'],
-  ['documentos_vehiculo','Documentos vehículos'], ['distancias_obra','Distancias de obras']
+  ['documentos_vehiculo','Documentos vehículos'], ['distancias_obra','Distancias de obras'],
+  ['asignaciones_vehiculo','Historial obras vehículos'], ['pedidos','Pedidos de materiales']
 ];
 // Supabase devuelve como máximo 1000 filas por pedido: pedimos de a 1000 hasta traer todo
 async function leerTodo(tabla){

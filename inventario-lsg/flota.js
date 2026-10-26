@@ -13,8 +13,8 @@
    las columnas de la base se llaman "km" pero guardan horas si unidad='horas'.
    ===================================================================== */
 const F = {
-  veh:[], venc:[], serv:[], cargas:[], dist:[], lect:[], docs:[], loaded:{}, falta:false, iniciado:false,
-  sel:null, vista:'flota', mes: hoy().slice(0,7), canal:null, urls:{}, vence:{}, firmando:{},
+  veh:[], venc:[], serv:[], cargas:[], dist:[], lect:[], docs:[], asig:[], loaded:{}, falta:false, iniciado:false,
+  sel:null, vista:'flota', q:'', mes: hoy().slice(0,7), canal:null, urls:{}, vence:{}, firmando:{},
   form:null, fotos:[]
 };
 try{ F.sel = localStorage.getItem('flota.sel'); }catch(e){}
@@ -44,7 +44,8 @@ const FT = {
   cargas_combustible:  ['cargas', () => sb.from('cargas_combustible').select('*').order('fecha',{ascending:false}).limit(5000)],
   distancias_obra:     ['dist',   () => sb.from('distancias_obra').select('*')],
   lecturas_vehiculo:   ['lect',   () => sb.from('lecturas_vehiculo').select('*').order('fecha',{ascending:false}).limit(5000)],
-  documentos_vehiculo: ['docs',   () => sb.from('documentos_vehiculo').select('*')]
+  documentos_vehiculo: ['docs',   () => sb.from('documentos_vehiculo').select('*')],
+  asignaciones_vehiculo: ['asig', () => sb.from('asignaciones_vehiculo').select('*').order('creado_en',{ascending:false}).limit(3000)]
 };
 async function fCargar(t){
   const [k, q] = FT[t];
@@ -55,6 +56,7 @@ async function fCargar(t){
     fRender(); return;
   }
   F[k] = data; F.loaded[t] = true; fRender();
+  if(t==='vehiculos' || t==='asignaciones_vehiculo') renderDetalle();
 }
 const fCargarTodo = () => Promise.all(Object.keys(FT).map(fCargar));
 function fEscuchar(){
@@ -80,6 +82,10 @@ sb.auth.onAuthStateChange((_e, s)=>{
 
 /* ---------------- 2) Cálculos ---------------- */
 const vehPor = id => F.veh.find(v=>v.id===id);
+// Maquinaria = máquinas que se controlan por horas o cargadas como tipo "Máquina". Se asignan obra a obra.
+const esMaq = v => v?.tipo==='maquina' || v?.unidad==='horas';
+const asigDe = vid => F.asig.filter(a=>a.vehiculo_id===vid).sort((a,b)=>String(b.desde).localeCompare(String(a.desde)) || String(b.creado_en).localeCompare(String(a.creado_en)));
+const textoVeh = v => norm(`${v.patente} ${v.marca} ${v.modelo} ${v.chofer} ${TIPOS_VEH[v.tipo]} ${v.obra_id?nomUbic(v.obra_id):'sin obra'}`);
 const vehNom = v => v ? `${v.patente} · ${[v.marca, v.modelo].filter(Boolean).join(' ')}`.replace(/ · $/,'') : '—';
 const diasHasta = f => Math.round((new Date(String(f).slice(0,10)+'T12:00:00') - new Date(hoy()+'T12:00:00')) / 86400000);
 const estadoDias = d => d < 0 ? 'rojo' : d <= 30 ? 'amarillo' : 'verde';
@@ -208,7 +214,8 @@ function fRender(){
   el.innerHTML = `
     <div class="mov-head">
       <div class="seg-mini" role="tablist">
-        <button class="${F.vista==='flota'?'on':''}" data-fvista="flota">Vehículos</button>
+        <button class="${F.vista==='flota'?'on':''}" data-fvista="flota">Vehículos (${F.veh.filter(v=>!esMaq(v)).length})</button>
+        <button class="${F.vista==='maq'?'on':''}" data-fvista="maq">Maquinaria (${F.veh.filter(esMaq).length})</button>
         <button class="${F.vista==='obras'?'on':''}" data-fvista="obras">Gasto por obra</button>
       </div>
       <div class="det-actions">
@@ -216,25 +223,29 @@ function fRender(){
         ${S.admin?`<button class="btn sm" data-fact="lecturas">Actualizar km / horas</button>
           <button class="btn sm" data-fact="tarjeta">Cargar resumen de tarjeta</button>
           <button class="btn sm" data-fact="cargarFlota">Cargar flota</button>
-          <button class="btn primary sm" data-fact="nuevoVeh">+ Vehículo</button>`:''}
+          <button class="btn primary sm" data-fact="nuevoVeh">${F.vista==='maq'?'+ Máquina':'+ Vehículo'}</button>`:''}
       </div>
     </div>
-    ${F.vista==='flota' ? vistaFlota() : vistaObras()}`;
+    ${F.vista==='obras' ? vistaObras() : vistaFlota(F.vista==='maq')}`;
 }
 
-function vistaFlota(){
-  const al = alertas();
-  const lista = F.veh.slice().sort((a,b)=>(a.activo===false)-(b.activo===false) || a.patente.localeCompare(b.patente));
-  if(!lista.length) return `<div class="vacio"><strong>Todavía no hay vehículos</strong>${S.admin?'Cargalos de a uno con "+ Vehículo" o varios juntos con "Cargar flota".':'Cuando un administrador los cargue, aparecen acá.'}</div>`;
-  if(F.sel && !vehPor(F.sel)) F.sel = null;
-  if(!F.sel) F.sel = lista[0].id;
+function vistaFlota(maq){
+  const delGrupo = F.veh.filter(v=>esMaq(v)===maq);
+  const al = alertas().filter(a=>esMaq(a.v)===maq);
+  const q = norm(F.q);
+  const lista = delGrupo.filter(v=>!q || textoVeh(v).includes(q)).sort((a,b)=>(a.activo===false)-(b.activo===false) || a.patente.localeCompare(b.patente));
+  if(!delGrupo.length) return `<div class="vacio"><strong>Todavía no hay ${maq?'maquinaria':'vehículos'}</strong>${S.admin?(maq?'Cargá cada máquina con "+ Máquina" (se controla por horas de uso).':'Cargalos de a uno con "+ Vehículo" o varios juntos con "Cargar flota".'):'Cuando un administrador los cargue, aparecen acá.'}</div>`;
+  if(F.sel && (!vehPor(F.sel) || esMaq(vehPor(F.sel))!==maq || !lista.some(v=>v.id===F.sel))) F.sel = null;
+  if(!F.sel && lista.length) F.sel = lista[0].id;
+  const buscador = `<input id="fBusca" type="search" placeholder="Buscar patente, marca, modelo, chofer u obra" aria-label="Buscar vehículos" value="${esc(F.q)}">`;
+  if(!lista.length) return `${buscador}<div class="vacio"><strong>Sin resultados</strong>Probá con otra patente o marca.</div>`;
   return `
     ${al.length?`<div class="alertas">
       <h3>Para atender (${al.length})</h3>
       <ul>${al.slice(0,14).map(a=>`<li class="al-${a.nivel}"><button class="link" data-veh="${esc(a.v.id)}">${esc(a.v.patente)}</button> ${esc(a.txt)}</li>`).join('')}</ul>
       ${al.length>14?`<p class="muted">Y ${al.length-14} más.</p>`:''}</div>`:`<p class="ok">Todo en orden: sin vencimientos ni services pendientes.</p>`}
     <section class="v-ubic">
-      <aside><div class="lista-veh">${lista.map(v=>{ const e = estadoVehiculo(v); return `
+      <aside>${buscador}${q?`<p class="muted conteo">${lista.length} de ${delGrupo.length}</p>`:''}<div class="lista-veh">${lista.map(v=>{ const e = estadoVehiculo(v); return `
         <button class="ubic veh ${v.id===F.sel?'on':''} ${v.activo===false?'archivada':''}" data-veh="${esc(v.id)}">
           <span class="patente">${esc(v.patente)}</span>
           <span class="u-nom">${esc([v.marca, v.modelo].filter(Boolean).join(' ') || TIPOS_VEH[v.tipo])}</span>
@@ -265,11 +276,12 @@ function fichaVeh(v){
         <p class="a-cargo">${u.horas?'Operador':'Chofer'}: <strong>${esc(v.chofer||'—')}</strong> · Obra: <strong>${esc(v.obra_id?nomUbic(v.obra_id):'sin asignar')}</strong></p>
       </div>
       <div class="det-actions">
-        ${S.admin?`<button class="btn primary sm" data-fact="carga">Cargar combustible</button>
+        ${S.admin?`<button class="btn ${esMaq(v)?'':'primary'} sm" data-fact="carga">Cargar combustible</button>
         <button class="btn sm" data-fact="lectura">Actualizar ${u.largo}</button>
         <button class="btn sm" data-fact="service">Registrar service</button>
         <button class="btn sm" data-fact="venc">Cargar vencimiento</button>
         <button class="btn sm" data-fact="doc">Subir documento</button>`:''}
+        ${S.admin && v.activo!==false?`<button class="btn ${esMaq(v)?'primary':''} sm" data-fact="trasladar">${esMaq(v)?'Trasladar a otra obra':'Cambiar de obra'}</button>`:''}
         <button class="btn sm" data-fact="pdfVeh">Ficha en PDF</button>
         ${S.admin?'<button class="btn ghost sm" data-fact="editarVeh">Editar</button>':''}
       </div>
@@ -324,9 +336,28 @@ function fichaVeh(v){
       ${servs.map(s=>`<tr class="${S.admin?'click':''}" ${S.admin?`data-fedit="service" data-id="${esc(s.id)}" tabindex="0"`:''}><td>${fFecha(s.fecha)}</td><td>${TIPOS_SERV[s.tipo]}</td><td class="num">${fmt(s.km)}</td><td>${esc(s.taller)}</td><td>${esc(s.detalle)}</td><td class="num">${fmtPlata(s.costo)}</td><td>${fotos(s.fotos)}</td></tr>`).join('')}
       </tbody></table></div>`:'<div class="vacio chico">Sin services registrados.</div>'}
       <p class="ayuda chica">Service cada ${fmtU(v.service_cada_km, v)} o ${v.service_cada_meses} meses, lo que llegue primero. Solo los de tipo "Service" reinician el contador.</p></div>
+    <div class="seccion"><h3>Historial de obras (${asigDe(v.id).length})</h3>
+      ${asigDe(v.id).length?`<div class="tabla-wrap"><table><thead><tr><th>Desde</th><th>Obra</th><th>Transporte</th><th>Remito</th><th>Nota</th></tr></thead><tbody>
+      ${asigDe(v.id).map(a=>{ const m = a.movimiento_id && S.movs.find(x=>x.id===a.movimiento_id);
+        return `<tr><td>${fFecha(a.desde)}</td><td>${a.obra_id?`<strong>${esc(nomUbic(a.obra_id))}</strong>`:'<span class="muted">Sin obra</span>'}</td><td>${esc(a.transporte)}</td>
+        <td>${m?`<button class="link" data-mov="${esc(m.id)}">${numRemito(m)}</button>`:a.movimiento_id?'Sí':'—'}</td><td class="muted">${esc(a.nota)}</td></tr>`; }).join('')}
+      </tbody></table></div>`:'<div class="vacio chico">Todavía sin traslados registrados.</div>'}
+      <p class="ayuda chica">${esMaq(v)?'Cada vez que la máquina pasa de una obra a otra, usá "Trasladar a otra obra": queda acá y, si querés, genera el remito LSG para firmar.':'Cuando cambiás la obra del vehículo queda registrado acá.'}</p></div>
     ${v.nota?`<p class="muted">${esc(v.nota)}</p>`:''}
   </div>`;
 }
+
+// Vehículos y máquinas que están en una obra (se muestra en la pantalla de la obra, en app.js)
+window.flotaEnObra = function(obraId){
+  if(!F.loaded.vehiculos || F.falta) return '';
+  const lista = F.veh.filter(v=>v.obra_id===obraId && v.activo!==false).sort((a,b)=>esMaq(b)-esMaq(a) || a.patente.localeCompare(b.patente));
+  if(!lista.length) return '';
+  return `<div class="seccion"><h3>Vehículos y maquinaria en esta obra (${lista.length})</h3>
+    <div class="tabla-wrap"><table><tbody>${lista.map(v=>`<tr class="click" data-irveh="${esc(v.id)}" tabindex="0">
+      <td class="mono">${esc(v.patente)}</td><td>${esc([v.marca, v.modelo].filter(Boolean).join(' ') || TIPOS_VEH[v.tipo])}</td>
+      <td><span class="chip ${esMaq(v)?'c-prov':'c-compra'}">${esMaq(v)?'Máquina':'Vehículo'}</span></td>
+      <td class="muted">${esc(v.chofer||'')}</td><td class="muted">desde ${fFecha(asigDe(v.id).find(a=>a.obra_id===obraId)?.desde)||'—'}</td></tr>`).join('')}</tbody></table></div></div>`;
+};
 
 function vistaObras(){
   const m = F.mes;
@@ -378,7 +409,7 @@ function abrirForm(tipo, id, extra={}){
   const v = vehPor(F.sel), u = U(v);
   let titulo='', body='', boton='Guardar', borrar=false;
   if(tipo==='veh'){
-    const x = id ? vehPor(id) : {};
+    const x = id ? vehPor(id) : (F.vista==='maq' ? {tipo:'maquina', unidad:'horas'} : {});
     titulo = id ? `Editar ${x.patente}` : 'Nuevo vehículo o máquina';
     body = `<div class="grid2">
       ${campo('Patente o identificación', `<input id="fv_pat" value="${esc(x.patente||'')}" placeholder="AB123CD o MAQ01" autocomplete="off">`)}
@@ -466,6 +497,18 @@ function abrirForm(tipo, id, extra={}){
       ${campo('Detalle', `<input id="fd_det" placeholder="Ej. La Segunda · Póliza 123456 · 2026-2027" autocomplete="off">`)}
     </div>${fotoInput('Archivos (PDF o fotos, podés elegir varios)')}
     <p class="ayuda chica">Si el documento tiene vencimiento (póliza, VTV), cargalo también en "Cargar vencimiento" para que el sistema te avise.</p>`;
+  }
+  if(tipo==='trasladar'){
+    const maq = esMaq(v), destinos = S.ubic.filter(u=>u.activa!==false && u.id!==v.obra_id).sort(ordenUbic);
+    titulo = `${maq?'Trasladar':'Cambiar de obra'} · ${v.patente}`; boton = maq ? 'Trasladar' : 'Guardar';
+    body = `<p class="ayuda">Ahora está en <strong>${esc(v.obra_id?nomUbic(v.obra_id):'el depósito (sin obra asignada)')}</strong>.</p>
+      <div class="grid2">
+        ${campo('Va a', `<select id="ft_dest">${destinos.map(u=>`<option value="${esc(u.id)}">${esc(u.nombre)}${u.tipo==='deposito'?' (depósito)':''}</option>`).join('')}</select>`)}
+        ${campo('Fecha', `<input id="ft_fecha" type="date" value="${hoy()}">`)}
+        ${campo('Transporte', `<input id="ft_transp" list="dlTransp" placeholder="Quién la lleva (ej. Rodrigo Berón)" autocomplete="off">`)}
+        ${campo('Nota', `<input id="ft_nota" placeholder="Opcional" autocomplete="off">`)}
+      </div>
+      <label class="check"><input type="checkbox" id="ft_remito" ${maq?'checked':''}> Generar remito LSG numerado (para imprimir y que firme quien recibe)</label>`;
   }
   if(tipo==='dist'){
     titulo = `Distancia a ${nomUbic(extra.obra)}`;
@@ -609,6 +652,17 @@ async function guardarForm(btn){
     if(tipo==='doc'){
       if(!F.fotos.length) throw new Error('Elegí al menos un archivo.');
       res = await sb.from('documentos_vehiculo').insert({vehiculo_id:F.sel, tipo:val('fd_tipo'), detalle:val('fd_det'), archivos: await conFotos(), creado_por:S.me});
+    }
+    if(tipo==='trasladar'){
+      const conRemito = $('#ft_remito').checked;
+      res = await sb.rpc('trasladar_vehiculo', {p:{vehiculo_id:F.sel, destino_id:val('ft_dest'), fecha:val('ft_fecha')||hoy(),
+        transporte:val('ft_transp'), nota:val('ft_nota'), con_remito:conRemito}});
+      if(res.error) throw new Error(/function|schema cache/i.test(res.error.message) ? 'Falta correr el vehiculos.sql nuevo en Supabase.' : res.error.message);
+      if(conRemito && res.data?.movimiento_id){
+        dlgFl.close(); await Promise.all([fCargarTodo(), cargar('movimientos')]);
+        abrirVer(res.data.movimiento_id, false, true);     // muestra el remito recién hecho, listo para imprimir
+        return;
+      }
     }
     if(tipo==='dist'){
       const km = num('fd_km');
@@ -799,15 +853,19 @@ function alertaFlota(msg){
 /* ---------------- 6) Eventos ---------------- */
 document.addEventListener('click', ev=>{
   const vista = ev.target.closest('[data-fvista]');
-  if(vista){ F.vista = vista.dataset.fvista; fRender(); return; }
+  if(vista){ F.vista = vista.dataset.fvista; F.sel = null; fRender(); return; }
+  const ir = ev.target.closest('[data-irveh]');      // desde la pantalla de una obra: ir a la ficha del vehículo
+  if(ir){ const v = vehPor(ir.dataset.irveh); if(!v) return; F.sel = v.id; F.vista = esMaq(v) ? 'maq' : 'flota'; F.q = ''; guardarSelVeh();
+    document.querySelector('[data-tab="flota"]').click(); return; }
   const veh = ev.target.closest('[data-veh]');
-  if(veh && !ev.target.closest('dialog')){ F.sel = veh.dataset.veh; F.vista='flota'; guardarSelVeh(); fRender(); if(innerWidth<880) $('#vFlota .det')?.scrollIntoView({behavior:'smooth',block:'start'}); return; }
+  if(veh && !ev.target.closest('dialog')){ F.sel = veh.dataset.veh; F.vista = esMaq(vehPor(F.sel)) ? 'maq' : 'flota'; guardarSelVeh(); fRender(); if(innerWidth<880) $('#vFlota .det')?.scrollIntoView({behavior:'smooth',block:'start'}); return; }
   const ed = ev.target.closest('[data-fedit]');
   if(ed && !ev.target.closest('a')){ abrirForm(ed.dataset.fedit, ed.dataset.id); return; }
   const a = ev.target.closest('[data-fact]'); if(!a) return;
   switch(a.dataset.fact){
     case 'nuevoVeh': abrirForm('veh'); break;
     case 'editarVeh': abrirForm('veh', F.sel); break;
+    case 'trasladar': abrirForm('trasladar'); break;
     case 'cargarFlota': abrirForm('cargarFlota'); break;
     case 'lecturas': abrirForm('lecturas'); break;
     case 'lectura': abrirForm('lectura'); break;
@@ -828,7 +886,16 @@ document.addEventListener('click', ev=>{
     case 'pdfVeh': compartirPDF(a, true); break;
   }
 });
-document.addEventListener('keydown', ev=>{ if(ev.key==='Enter' && ev.target.matches('tr[data-fedit]')) abrirForm(ev.target.dataset.fedit, ev.target.dataset.id); });
+document.addEventListener('keydown', ev=>{
+  if(ev.key==='Enter' && ev.target.matches('tr[data-fedit]')) abrirForm(ev.target.dataset.fedit, ev.target.dataset.id);
+  if(ev.key==='Enter' && ev.target.matches('tr[data-irveh]')) ev.target.click();
+});
+// Buscador de vehículos: repinta sin perder lo que se está escribiendo
+document.addEventListener('input', ev=>{
+  if(ev.target.id!=='fBusca') return;
+  F.q = ev.target.value; const pos = ev.target.selectionStart; fRender();
+  const b = $('#fBusca'); if(b){ b.focus(); b.setSelectionRange(pos, pos); }
+});
 document.addEventListener('change', async ev=>{
   if(ev.target.id==='fMes'){ F.mes = ev.target.value || hoy().slice(0,7); fRender(); }
   if(ev.target.id==='fv_uni') etiquetasUnidad();
