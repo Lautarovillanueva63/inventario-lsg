@@ -33,10 +33,11 @@ function filaPed(p, conObra){
   const n = (p.items||[]).length, r = recibidos(p);
   return `<tr class="click" data-ped="${esc(p.id)}" tabindex="0"><td class="mono">${numPed(p)}</td>${conObra?`<td>${esc(nomUbic(p.obra_id))}</td>`:''}
     <td>${fFecha(p.fecha)}</td><td>${chipPed(p)}</td><td class="muted">${esc(resumenPed(p))}</td>
-    <td class="num">${p.estado==='parcial'||p.estado==='recibido'?`${r}/${n}`:n}</td></tr>`;
+    <td class="num">${p.estado==='parcial'||p.estado==='recibido'?`${r}/${n}`:n}</td>
+    ${S.admin?`<td class="acc"><button type="button" class="icono peligro" data-pact="borrar" data-id="${esc(p.id)}" title="Eliminar pedido" aria-label="Eliminar pedido ${numPed(p)}">${ICONO.tacho}</button></td>`:''}</tr>`;
 }
 function tablaPeds(lista, conObra){
-  return `<div class="tabla-wrap"><table><thead><tr><th>N°</th>${conObra?'<th>Obra</th>':''}<th>Fecha</th><th>Estado</th><th>Detalle</th><th class="num">Ítems</th></tr></thead>
+  return `<div class="tabla-wrap"><table><thead><tr><th>N°</th>${conObra?'<th>Obra</th>':''}<th>Fecha</th><th>Estado</th><th>Detalle</th><th class="num">Ítems</th>${S.admin?'<th class="acc"></th>':''}</tr></thead>
     <tbody>${lista.map(p=>filaPed(p, conObra)).join('')}</tbody></table></div>`;
 }
 window.pedidosRender = function(){
@@ -133,8 +134,8 @@ function pintarPedido(obraNueva){
         return esPdf(f) ? `<a class="btn" href="${esc(u)}" target="_blank" rel="noopener">Abrir PDF</a>` : `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Factura o remito"></a>`; }).join('')}</div>`:''}
     ${(p.movimientos||[]).length?`<p class="muted" style="margin:0">Se cargó en el stock de la obra con ${p.movimientos.length===1?'1 ingreso de proveedor':p.movimientos.length+' ingresos de proveedor'}: ${p.movimientos.map(id=>`<button class="link" data-mov="${esc(id)}">ver</button>`).join(' · ')}</p>`:''}`;
   const b = [];
-  if(S.admin && p.estado==='en_espera') b.push('<button type="button" class="btn danger" data-pact="anular" style="margin-right:auto">Anular</button>', '<button type="button" class="btn" data-pact="volver">Volver a presupuesto</button>');
-  if(S.admin && p.estado==='anulado') b.push('<button type="button" class="btn danger" data-pact="borrar" style="margin-right:auto">Eliminar</button>');
+  if(S.admin) b.push('<button type="button" class="btn danger" data-pact="borrar" style="margin-right:auto">Eliminar</button>');
+  if(S.admin && p.estado==='en_espera') b.push('<button type="button" class="btn" data-pact="anular">Anular</button>', '<button type="button" class="btn" data-pact="volver">Volver a presupuesto</button>');
   b.push('<button type="button" class="btn" data-pact="pdf">Descargar PDF</button>');
   if(S.admin && (p.estado==='en_espera' || p.estado==='parcial')) b.push('<button type="button" class="btn primary" data-pact="recibir">Registrar recepción</button>');
   else b.push('<button type="button" class="btn primary" data-close>Cerrar</button>');
@@ -190,12 +191,18 @@ async function cambiarEstado(estado, btn){
   P.msg = estado==='anulado' ? 'Pedido anulado.' : 'Volvió a presupuesto: ya lo podés editar.';
   upsertLocal(data); pintarPedido();
 }
+// Eliminar un pedido (cualquier estado). Antes pregunta "¿Seguro que querés eliminar…?".
+// Si ya se había recibido, lo cargado en la obra NO se borra: el stock y los ingresos de proveedor quedan.
 async function borrarPedido(btn){
-  if(btn.dataset.ok!=='1'){ btn.dataset.ok='1'; btn.textContent='¿Seguro? Tocá de nuevo'; return; }
+  const id = btn.dataset.id || P.id, p = pedPor(id); if(!p) return;
+  const aviso = `¿Seguro que querés eliminar el pedido N° ${numPed(p)} de ${nomUbic(p.obra_id)}?`
+    + (recibidos(p) ? '\n\nLo que ya se recibió queda cargado en la obra (el stock y los ingresos de proveedor no se borran).' : '')
+    + '\n\nEsto no se puede deshacer.';
+  if(!confirm(aviso)) return;
   btn.disabled = true;
-  const {error} = await sb.from('pedidos').delete().eq('id', P.id);
-  if(error){ btn.disabled=false; return alert('No se pudo eliminar.'); }
-  S.peds = S.peds.filter(x=>x.id!==P.id); dlgP.close(); render(); window.pedidosRender();
+  const {error} = await sb.from('pedidos').delete().eq('id', id);
+  if(error){ btn.disabled = false; return alert('No se pudo eliminar. ' + (/policy|permission/i.test(error.message) ? 'Falta correr el supabase.sql nuevo.' : 'Probá de nuevo.')); }
+  S.peds = S.peds.filter(x=>x.id!==id); if(dlgP.open && P.id===id) dlgP.close(); render(); window.pedidosRender();
 }
 
 /* ---------------- Recepción: llegó el pedido a la obra ---------------- */
@@ -342,6 +349,8 @@ async function descargarPDF(btn){
 
 /* ---------------- Eventos ---------------- */
 document.addEventListener('click', ev=>{
+  const tacho = ev.target.closest('tr [data-pact="borrar"]');
+  if(tacho){ borrarPedido(tacho); return; }
   const fila = ev.target.closest('[data-ped]');
   if(fila){ window.abrirPedido(fila.dataset.ped); return; }
   const a = ev.target.closest('[data-pact]'); if(!a) return;
