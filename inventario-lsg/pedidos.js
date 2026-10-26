@@ -1,19 +1,19 @@
 /* =====================================================================
    Pedidos de materiales — LSG
-   Ciclo de un pedido:
-     1) PRESUPUESTO: se arma (materiales y herramientas) y queda guardado en la obra.
-        Se puede descargar el PDF con el formato de la planilla (Anexo III · PG-850.01).
-     2) EN ESPERA: se confirmó con el proveedor; ya no se edita.
-     3) RECIBIDO (o PARCIAL): llegó a la obra. Se sube la factura y el remito y lo que
-        llegó se carga solo en el stock de esa obra (un "ingreso de proveedor").
+   Ciclo de un pedido (en la base los estados se llaman presupuesto / en_espera / recibido):
+     1) PEDIDO (borrador): se arma (materiales y herramientas) y queda guardado en la obra.
+     2) EMITIR PEDIDO: se descarga el PDF con el formato de la planilla (Anexo III · PG-850.01)
+        para mandarlo al proveedor, y queda ESPERANDO CONFIRMACIÓN; ya no se edita.
+     3) CONFIRMAR PEDIDO: cuando el proveedor confirma, se sube el remito y la factura y todo
+        se carga solo en el stock de esa obra (un "ingreso de proveedor"). Queda CONFIRMADO.
    Usa cosas de app.js (sb, S, $, esc, fmt, hoy, fFecha, nomUbic, subirArchivos, cargar…)
    y de flota.js (cargarScript, LIBS_PDF, compartirDoc).
    ===================================================================== */
 const PED_ESTADOS = {
-  presupuesto: {txt:'Presupuesto',      chip:'c-compra'},
-  en_espera:   {txt:'En espera',        chip:'c-pend'},
-  parcial:     {txt:'Recibido parcial', chip:'c-prov'},
-  recibido:    {txt:'Recibido',         chip:'c-ok'},
+  presupuesto: {txt:'Pedido (borrador)',       chip:'c-compra'},
+  en_espera:   {txt:'Esperando confirmación',  chip:'c-pend'},
+  parcial:     {txt:'Confirmado en parte',     chip:'c-prov'},
+  recibido:    {txt:'Confirmado',              chip:'c-ok'},
   anulado:     {txt:'Anulado',          chip:'c-sale'}
 };
 const ACTIVOS = ['presupuesto','en_espera','parcial'];
@@ -108,13 +108,13 @@ function pintarPedido(obraNueva){
       <div class="bloque"><div class="items-head"><span class="lbl">Ítems del pedido</span><button type="button" class="btn ghost sm" data-pact="filaItem">+ Ítem</button></div>
         <div class="pi-cab"><span>Tipo</span><span>Cant.</span><span>Unidad</span><span>Descripción</span><span>Observaciones</span><span></span></div>
         <div id="pItems" class="filas">${(p?.items?.length ? p.items : [{clase:'material', unidad:'un'}]).map(filaItem).join('')}</div>
-        <p class="ayuda chica">Elegí <strong>Material</strong> para lo que se cuenta por cantidad (bolsas, kg, barras) y <strong>Herramienta</strong> para lo que lleva código propio. Cuando llegue el pedido, todo se carga solo en esta obra.</p></div>
+        <p class="ayuda chica">Elegí <strong>Material</strong> para lo que se cuenta por cantidad (bolsas, kg, barras) y <strong>Herramienta</strong> para lo que lleva código propio. Cuando confirmes el pedido, todo se carga solo en esta obra.</p></div>
       <label><span>Nota interna (no sale en el PDF)</span><textarea id="pNota" rows="2">${esc(p?.nota||'')}</textarea></label>
       <p id="pError" class="error" hidden></p>`;
     $('#pFoot').innerHTML = `${p?'<button type="button" class="btn danger" data-pact="borrar" style="margin-right:auto">Eliminar</button>':''}
       <button type="button" class="btn" data-pact="pdf">Descargar PDF</button>
-      <button type="button" class="btn" data-pact="guardar">Guardar presupuesto</button>
-      <button type="button" class="btn primary" data-pact="confirmar">Confirmar pedido</button>`;
+      <button type="button" class="btn" data-pact="guardar">Guardar pedido</button>
+      <button type="button" class="btn primary" data-pact="confirmar" title="Descarga el PDF para mandar al proveedor y queda esperando confirmación">Emitir pedido y descargar PDF</button>`;
     if(!obras.length && !p) $('#pBody').insertAdjacentHTML('afterbegin', '<p class="aviso">No hay obras activas. Creá una obra primero.</p>');
     return;
   }
@@ -122,22 +122,22 @@ function pintarPedido(obraNueva){
   const items = p.items||[], conEntrega = items.some(i=>i.recibido);
   firmar(p.fotos||[]);
   $('#pBody').innerHTML = `${msg}
-    <div class="r-top">${chipPed(p)}<span class="muted">Emitido el ${fFecha(p.fecha)}${p.confirmado_en?` · confirmado el ${fFecha(p.confirmado_en)}`:''}</span></div>
+    <div class="r-top">${chipPed(p)}<span class="muted">Fecha de emisión ${fFecha(p.fecha)}${p.confirmado_en?` · enviado al proveedor el ${fFecha(p.confirmado_en)}`:''}${p.recibido_en?` · confirmado el ${fFecha(p.recibido_en)}`:''}</span></div>
     <div class="tabla-wrap"><table><thead><tr><th>Ítem</th><th class="num">Cant.</th><th>Unidad</th><th>Descripción</th><th>Observaciones</th>${conEntrega?'<th>Proveedor</th><th>N° remito</th><th>Entrega</th>':''}<th>Estado</th></tr></thead><tbody>
       ${items.map((i,k)=>`<tr><td>${k+1}</td><td class="num">${fmt(i.cantidad)}</td><td>${esc(i.unidad)}</td><td>${esc(i.descripcion)}${i.clase==='herramienta'?' <span class="chip c-alta">Herramienta</span>':''}</td>
         <td class="muted">${esc(i.observaciones||'')}</td>${conEntrega?`<td>${esc(i.proveedor||'')}</td><td class="mono">${esc(i.numero_remito||'')}</td><td>${fFecha(i.fecha_entrega)}</td>`:''}
-        <td>${i.recibido?'<span class="chip c-ok">Llegó</span>':p.estado==='anulado'?'—':'<span class="chip c-pend">Pendiente</span>'}</td></tr>`).join('')}
+        <td>${i.recibido?'<span class="chip c-ok">Cargado</span>':p.estado==='anulado'?'—':'<span class="chip c-pend">Pendiente</span>'}</td></tr>`).join('')}
     </tbody></table></div>
     ${p.nota?`<p style="margin:0"><span class="lbl">Nota</span>${esc(p.nota)}</p>`:''}
-    ${(p.fotos||[]).length?`<div class="ver-fotos"><span class="lbl">Facturas y remitos recibidos</span>${p.fotos.map(f=>{ const u=S.urls[f];
+    ${(p.fotos||[]).length?`<div class="ver-fotos"><span class="lbl">Remitos y facturas</span>${p.fotos.map(f=>{ const u=S.urls[f];
         if(!u) return '<span class="muted">Cargando…</span>';
         return esPdf(f) ? `<a class="btn" href="${esc(u)}" target="_blank" rel="noopener">Abrir PDF</a>` : `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Factura o remito"></a>`; }).join('')}</div>`:''}
     ${(p.movimientos||[]).length?`<p class="muted" style="margin:0">Se cargó en el stock de la obra con ${p.movimientos.length===1?'1 ingreso de proveedor':p.movimientos.length+' ingresos de proveedor'}: ${p.movimientos.map(id=>`<button class="link" data-mov="${esc(id)}">ver</button>`).join(' · ')}</p>`:''}`;
   const b = [];
   if(S.admin) b.push('<button type="button" class="btn danger" data-pact="borrar" style="margin-right:auto">Eliminar</button>');
-  if(S.admin && p.estado==='en_espera') b.push('<button type="button" class="btn" data-pact="anular">Anular</button>', '<button type="button" class="btn" data-pact="volver">Volver a presupuesto</button>');
+  if(S.admin && p.estado==='en_espera') b.push('<button type="button" class="btn" data-pact="anular">Anular</button>', '<button type="button" class="btn" data-pact="volver">Volver a editar</button>');
   b.push('<button type="button" class="btn" data-pact="pdf">Descargar PDF</button>');
-  if(S.admin && (p.estado==='en_espera' || p.estado==='parcial')) b.push('<button type="button" class="btn primary" data-pact="recibir">Registrar recepción</button>');
+  if(S.admin && (p.estado==='en_espera' || p.estado==='parcial')) b.push(`<button type="button" class="btn primary" data-pact="recibir">${p.estado==='parcial'?'Confirmar lo que falta':'Confirmar pedido'}</button>`);
   else b.push('<button type="button" class="btn primary" data-close>Cerrar</button>');
   $('#pFoot').innerHTML = b.join('');
 }
@@ -176,9 +176,10 @@ async function guardarPedido(btn, confirmar){
       res = r2;
     }
     upsertLocal(res.data);
-    P.msg = confirmar ? `Pedido N° ${numPed(res.data)} confirmado: queda <strong>en espera</strong> hasta que llegue. Cuando llegue, tocá "Registrar recepción".`
-                      : `Presupuesto N° ${numPed(res.data)} guardado en ${esc(nomUbic(res.data.obra_id))}.`;
+    P.msg = confirmar ? `Pedido N° ${numPed(res.data)} emitido: se descargó el PDF para mandarlo al proveedor y queda <strong>esperando confirmación</strong>. Cuando el proveedor confirme, tocá "Confirmar pedido".`
+                      : `Pedido N° ${numPed(res.data)} guardado en ${esc(nomUbic(res.data.obra_id))}. Todavía no se emitió.`;
     pintarPedido();
+    if(confirmar) await bajarPDF(res.data);
   }catch(e){ btn.disabled = false; errPed(e.message); }
 }
 function upsertLocal(p){ const i = S.peds.findIndex(x=>x.id===p.id); i>=0 ? S.peds[i]=p : S.peds.unshift(p); render(); window.pedidosRender(); }
@@ -188,7 +189,7 @@ async function cambiarEstado(estado, btn){
   btn.disabled = true;
   const {data, error} = await sb.from('pedidos').update({estado, ...extra}).eq('id', P.id).select().single();
   if(error){ btn.disabled=false; return alert('No se pudo cambiar el estado. Probá de nuevo.'); }
-  P.msg = estado==='anulado' ? 'Pedido anulado.' : 'Volvió a presupuesto: ya lo podés editar.';
+  P.msg = estado==='anulado' ? 'Pedido anulado.' : 'Volvió a borrador: ya lo podés editar y emitir de nuevo.';
   upsertLocal(data); pintarPedido();
 }
 // Eliminar un pedido (cualquier estado). Antes pregunta "¿Seguro que querés eliminar…?".
@@ -209,7 +210,7 @@ async function borrarPedido(btn){
 function pintarRecepcion(p){
   const pend = (p.items||[]).map((i,k)=>({...i, k})).filter(i=>!i.recibido);
   $('#pBody').innerHTML = `
-    <p class="ayuda">Tildá lo que llegó y completá proveedor y N° de remito. Lo tildado se carga en el stock de <strong>${esc(nomUbic(p.obra_id))}</strong>. Lo que no tildes queda pendiente para otra entrega.</p>
+    <p class="ayuda">El proveedor confirmó: completá proveedor y N° de remito y subí <strong>el remito y la factura</strong>. Todo lo tildado se carga en el stock de <strong>${esc(nomUbic(p.obra_id))}</strong>. Si algo no vino, destildalo y queda pendiente.</p>
     <div class="todos-rec grid3">
       <label><span>Proveedor (para todos)</span><input id="rProv" list="dlProv" autocomplete="off"></label>
       <label><span>N° de remito (para todos)</span><input id="rRem" autocomplete="off"></label>
@@ -221,13 +222,13 @@ function pintarRecepcion(p){
         <td><input class="r-prov" data-k="${i.k}" list="dlProv" autocomplete="off" placeholder="Igual que arriba" aria-label="Proveedor"></td>
         <td><input class="r-rem" data-k="${i.k}" autocomplete="off" placeholder="Igual que arriba" aria-label="N° de remito"></td></tr>`).join('')}
     </tbody></table></div>
-    <div class="foto-box"><span class="lbl">Factura y remito recibidos (fotos o PDF)</span>
+    <div class="foto-box"><span class="lbl">Remito y factura (fotos o PDF)</span>
       <div id="rPrev" class="previews"></div>
-      <button type="button" class="btn sm" data-pact="archivos">Agregar factura / remito</button></div>
+      <button type="button" class="btn sm" data-pact="archivos">Agregar remito / factura</button></div>
     <p id="pError" class="error" hidden></p>`;
   pintarArchivos();
   $('#pFoot').innerHTML = `<button type="button" class="btn" data-pact="cancelarRec">Cancelar</button>
-    <button type="button" class="btn primary" data-pact="confirmarRec">Registrar recepción</button>`;
+    <button type="button" class="btn primary" data-pact="confirmarRec">Confirmar y cargar en la obra</button>`;
 }
 function pintarArchivos(){
   const el = $('#rPrev'); if(!el) return;
@@ -243,7 +244,7 @@ async function confirmarRecepcion(btn){
   if(!items.length) return errPed('Tildá al menos un ítem que haya llegado.');
   const sinProv = items.find(i=>!i.proveedor);
   if(sinProv) return errPed(`Falta el proveedor de "${p.items[sinProv.i].descripcion}". Completalo en la fila o en "Proveedor (para todos)".`);
-  if(!P.archivos.length) return errPed('Subí la foto de la factura y del remito del proveedor antes de registrar la recepción.');
+  if(!P.archivos.length) return errPed('Subí la foto del remito y de la factura antes de confirmar el pedido.');
   btn.disabled = true;
   try{
     const fotos = await subirArchivos(P.archivos.map(f=>f.file), (i,n)=>btn.textContent=`Subiendo ${i} de ${n}…`);
@@ -254,9 +255,9 @@ async function confirmarRecepcion(btn){
     upsertLocal(data);
     await Promise.all(['herramientas','materiales','stock_materiales','movimientos'].map(cargar));
     P.modo = 'ver';
-    P.msg = `Recepción registrada: ${items.length} ${items.length===1?'ítem cargado':'ítems cargados'} en ${esc(nomUbic(p.obra_id))}.${data.estado==='parcial'?' Quedan ítems pendientes.':''}`;
+    P.msg = `Pedido confirmado: ${items.length} ${items.length===1?'ítem cargado':'ítems cargados'} en ${esc(nomUbic(p.obra_id))}, con el remito y la factura guardados.${data.estado==='parcial'?' Quedan ítems pendientes.':''}`;
     pintarPedido();
-  }catch(e){ btn.disabled = false; btn.textContent = 'Registrar recepción'; errPed(e.message || 'No se pudo registrar. Probá de nuevo.'); }
+  }catch(e){ btn.disabled = false; btn.textContent = 'Confirmar y cargar en la obra'; errPed(e.message || 'No se pudo confirmar. Probá de nuevo.'); }
 }
 
 /* ---------------- PDF con el formato de la planilla ---------------- */
@@ -329,6 +330,15 @@ async function pdfPedido(p){
   }
   return doc;
 }
+// Arma el PDF y lo descarga (en el celular abre "Compartir" para mandarlo por WhatsApp)
+async function bajarPDF(p){
+  try{
+    const doc = await pdfPedido(p);
+    // Nombre de archivo sin acentos ni espacios (algunos navegadores los rechazan y lo bajan como "download")
+    const obraArchivo = nomUbic(p.obra_id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9-]+/g,'_').replace(/^_|_$/g,'');
+    await compartirDoc(doc, `Pedido-${numPed(p)}-${obraArchivo}.pdf`, `Pedido de materiales N° ${numPed(p)}`);
+  }catch(e){ throw e; }
+}
 async function descargarPDF(btn){
   const txt = btn.textContent; btn.disabled = true; btn.textContent = 'Armando PDF…';
   try{
@@ -339,10 +349,7 @@ async function descargarPDF(btn){
       p = {...(p||{numero: S.peds.filter(x=>x.obra_id===$('#pObra')?.value).reduce((m,x)=>Math.max(m,x.numero),0)+1, obra_id: $('#pObra')?.value}),
            items, fecha: $('#pFecha').value || hoy()};
     }
-    const doc = await pdfPedido(p);
-    // Nombre de archivo sin acentos ni espacios (algunos navegadores los rechazan y lo bajan como "download")
-    const obraArchivo = nomUbic(p.obra_id).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z0-9-]+/g,'_').replace(/^_|_$/g,'');
-    await compartirDoc(doc, `Pedido-${numPed(p)}-${obraArchivo}.pdf`, `Pedido de materiales N° ${numPed(p)}`);
+    await bajarPDF(p);
   }catch(e){ errPed(e.message || 'No se pudo armar el PDF.'); }
   finally{ btn.disabled = false; btn.textContent = txt; }
 }

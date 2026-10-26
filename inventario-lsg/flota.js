@@ -837,10 +837,12 @@ async function compartirPDF(btn, soloUno){
     alertaFlota(e.message);
   }finally{ btn.disabled = false; btn.textContent = txt; }
 }
-// En el celular abre el menú de compartir (WhatsApp, mail…); en la compu descarga el PDF
+// En el CELULAR abre el menú de compartir (WhatsApp, mail…). En la COMPU lo descarga directo:
+// Windows también tiene "Compartir", pero ahí es más cómodo tener el archivo en Descargas.
+const esCelular = () => /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) && matchMedia('(pointer:coarse)').matches;
 async function compartirDoc(doc, nombre, titulo){
   const archivo = new File([doc.output('blob')], nombre, {type:'application/pdf'});
-  if(navigator.canShare?.({files:[archivo]})){
+  if(esCelular() && navigator.canShare?.({files:[archivo]})){
     try{ await navigator.share({files:[archivo], title: titulo}); }
     catch(e){ if(e.name!=='AbortError') doc.save(nombre); }
   } else doc.save(nombre);
