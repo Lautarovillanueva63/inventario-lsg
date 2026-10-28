@@ -466,8 +466,36 @@ const filaMatHTML = () => `<div class="fm">
   <select class="mu" aria-label="Unidad">${UNIDADES.map(u=>`<option>${u}</option>`).join('')}</select>
   <button type="button" class="x" data-act="quitarFila" aria-label="Quitar">×</button></div>`;
 
-function abrirMov({tipo='traslado', origen, destino, todo=false, nota=''}={}){
-  S.mov = {sel:new Set(), qty:{}};
+// Lo que se puede elegir en el origen. Al MODIFICAR, también lo que se llevó en el movimiento original
+// (que hoy está en el destino, o dado de baja si era un consumo): al guardar, primero vuelve al origen.
+function herrDisponibles(o){
+  const base = herrEn(o), ed = S.mov?.edit;
+  if(!ed || o!==ed.origen_id) return base;
+  const extra = (ed.items||[]).filter(i=>i.clase==='herramienta').map(i=>S.herr.find(h=>h.id===i.id))
+    .filter(h=>h && !base.some(b=>b.id===h.id) && (ed.tipo==='consumo' ? h.de_baja : (!h.de_baja && h.ubicacion_id===ed.destino_id)));
+  return [...base, ...extra].sort(porCodigo);
+}
+function matsDisponibles(o){
+  const base = matsEn(o).map(m=>({...m})), ed = S.mov?.edit;
+  if(!ed || o!==ed.origen_id) return base;
+  for(const i of (ed.items||[]).filter(i=>i.clase==='material')){
+    const m = base.find(x=>x.id===i.id);
+    if(m) m.cantidad += Number(i.cantidad); else if(matPor(i.id)) base.push({...matPor(i.id), cantidad:Number(i.cantidad)});
+  }
+  return base.sort(porNombre);
+}
+const TIPOS_EDITABLES = ['traslado','sin_remito','consumo'];
+const nombreMov = m => m.tipo==='traslado' ? `el remito ${numRemito(m)}` : m.tipo==='sin_remito' ? 'el movimiento sin remito' : m.tipo==='consumo' ? 'el consumo/baja' : m.tipo==='alta' ? 'el alta de inventario' : 'el ingreso de proveedor';
+const deUnPedido = m => S.peds.find(p=>(p.movimientos||[]).includes(m.id));
+
+function abrirMov({tipo='traslado', origen, destino, todo=false, nota='', editar=null}={}){
+  S.mov = {sel:new Set(), qty:{}, edit:editar};
+  if(editar){
+    tipo = editar.tipo; origen = editar.origen_id; destino = editar.destino_id || editar.origen_id;
+    (editar.items||[]).forEach(i=>{ if(i.clase==='herramienta') S.mov.sel.add(i.id); if(i.clase==='material') S.mov.qty[i.id] = Number(i.cantidad); });
+  }
+  // Al modificar solo se puede elegir entre los tipos que sacan cosas de un origen
+  $$('#mTipos label').forEach(l=>{ l.hidden = !!editar && !TIPOS_EDITABLES.includes(l.querySelector('input').value); });
   if(todo && origen){
     herrEn(origen).forEach(h=>S.mov.sel.add(h.id));
     matsEn(origen).forEach(m=>S.mov.qty[m.id] = m.cantidad);
@@ -479,6 +507,7 @@ function abrirMov({tipo='traslado', origen, destino, todo=false, nota=''}={}){
   ['#mProv','#mNumProv','#mEntrega','#mTransp','#mNota','#mFiltroHerr'].forEach(s=>$(s).value='');
   $('#mFecha').value = hoy(); $('#mFoto').value = '';
   if(nota) $('#mNota').value = nota;
+  if(editar){ $('#mFecha').value = String(editar.fecha).slice(0,10); $('#mNota').value = editar.nota||''; $('#mEntrega').value = editar.entrega||''; $('#mTransp').value = editar.transporte||''; }
   $('#filasHerr').innerHTML = filaHerrHTML();
   $('#filasMat').innerHTML = filaMatHTML();
   $('#mError').hidden = true;
@@ -490,9 +519,12 @@ function abrirMov({tipo='traslado', origen, destino, todo=false, nota=''}={}){
 
 function aplicarTipo(){
   const t = tipoMov(), info = TIPOS[t];
-  $('#mTitulo').textContent = info.titulo;
-  $('#mAyuda').textContent = info.ayuda;
-  $('#mGuardar').textContent = info.boton;
+  const ed = S.mov?.edit;
+  $('#mTitulo').textContent = ed ? `Modificar ${nombreMov(ed)}` : info.titulo;
+  $('#mAyuda').textContent = ed
+    ? `Cambiá lo que haga falta y tocá "Guardar cambios": se deshace el movimiento original y se registra de nuevo así.${ed.tipo==='traslado'?` Si sigue siendo remito, conserva el número ${numRemito(ed)}.`:''}${(ed.fotos||[]).length?' La foto firmada anterior se descarta: hay que volver a subirla.':''}`
+    : info.ayuda;
+  $('#mGuardar').textContent = ed ? 'Guardar cambios' : info.boton;
   $('#wOrigen').hidden = !usaOrigen(t);
   $('#wDestino').hidden = t==='consumo';
   $('#lDestino').textContent = mueve(t) ? 'Va a' : 'Se carga en';
@@ -513,7 +545,7 @@ function aplicarTipo(){
 function renderSeleccion(){
   if(!S.mov || !usaOrigen(tipoMov())) return;
   const o = $('#mOrigen').value, q = norm($('#mFiltroHerr').value);
-  const herrs = herrEn(o);
+  const herrs = herrDisponibles(o);
   for(const id of [...S.mov.sel]) if(!herrs.some(h=>h.id===id)) S.mov.sel.delete(id);
   const vis = herrs.filter(h=>!q || norm(`${h.codigo} ${h.nombre} ${h.descripcion}`).includes(q));
   $('#mFiltroHerr').hidden = herrs.length < 8;
@@ -522,7 +554,7 @@ function renderSeleccion(){
     vis.map(h=>`<label class="ck"><input type="checkbox" data-h="${esc(h.id)}" ${S.mov.sel.has(h.id)?'checked':''}>
       <span class="mono">${esc(h.codigo)}</span><span class="ck-nom">${esc(h.nombre)}${h.descripcion?` <small class="muted">${esc(h.descripcion)}</small>`:''}</span></label>`).join('');
   $('#cHerrSel').textContent = herrs.length ? `${S.mov.sel.size} de ${herrs.length}` : '';
-  const mats = matsEn(o);
+  const mats = matsDisponibles(o);
   $('#listaMatSel').innerHTML = !mats.length ? `<div class="vacio chico">No hay materiales en ${esc(nomUbic(o))}.</div>` :
     mats.map(m=>`<div class="ms">
       <span class="ms-nom">${esc(m.nombre)}<small class="muted">Hay ${fmt(m.cantidad)} ${esc(m.unidad)}</small></span>
@@ -546,7 +578,7 @@ async function guardarMov(ev){
   if(usaOrigen(t)){
     p.origen_id = $('#mOrigen').value;
     p.herramientas = [...S.mov.sel].map(id=>({id}));
-    const disponibles = Object.fromEntries(matsEn(p.origen_id).map(m=>[m.id, m]));
+    const disponibles = Object.fromEntries(matsDisponibles(p.origen_id).map(m=>[m.id, m]));
     p.materiales = [];
     for(const [id, c] of Object.entries(S.mov.qty)){
       const cant = Number(c); if(!(cant>0)) continue;
@@ -590,14 +622,17 @@ async function guardarMov(ev){
       p.fotos = await subirArchivos(S.fotosNuevas.map(f=>f.file), (i,n)=>btn.textContent=`Subiendo foto ${i} de ${n}…`);
     }
     btn.textContent = 'Guardando…';
-    const {data, error} = await sb.rpc('registrar_movimiento', {p});
-    if(error) throw new Error(error.message);
+    const ed = S.mov.edit;
+    const {data, error} = ed ? await sb.rpc('modificar_movimiento', {p:{id:ed.id, nuevo:p}})
+                             : await sb.rpc('registrar_movimiento', {p});
+    if(error) throw new Error(/function|schema cache/i.test(error.message) && ed ? 'Falta correr el supabase.sql nuevo en Supabase.' : error.message);
     S.fotosNuevas.forEach(f=>URL.revokeObjectURL(f.url)); S.fotosNuevas = [];
     dlgM.close();
-    await Promise.all(['herramientas','materiales','stock_materiales','movimientos'].map(cargar));
-    if(mueve(t)) abrirVer(data.id, false, true);
+    await recargarTodo();
+    if(ed) abrirVer(data.id, false, 'modificado');
+    else if(mueve(t)) abrirVer(data.id, false, true);
   }catch(e){
-    btn.disabled = false; btn.textContent = TIPOS[t].boton;
+    btn.disabled = false; btn.textContent = S.mov.edit ? 'Guardar cambios' : TIPOS[t].boton;
     errorMov(e.message || 'No se pudo guardar. Revisá la conexión y probá de nuevo.');
   }
 }
@@ -612,7 +647,8 @@ function abrirVer(id, soloRepintar, recienCreado){
   $('#vTitulo').textContent = m.tipo==='traslado' ? `Remito ${numRemito(m)}` : m.tipo==='sin_remito' ? 'Movimiento sin remito' : t.titulo;
   const herrs = (m.items||[]).filter(i=>i.clase!=='material'), mats = (m.items||[]).filter(i=>i.clase==='material');
   $('#vBody').innerHTML = `
-    ${recienCreado?`<p class="ok">${m.tipo==='traslado'
+    ${recienCreado==='modificado'?`<p class="ok">Listo: ${esc(nombreMov(m))} quedó modificado y el inventario ya está corregido.${m.tipo==='traslado'?' Imprimilo de nuevo para que lo firmen.':''}</p>`:''}
+    ${recienCreado===true?`<p class="ok">${m.tipo==='traslado'
       ? `Remito generado. Los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. Imprimilo para que lo firme quien recibe.`
       : `Listo: los ítems ya figuran en ${esc(nomUbic(m.destino_id))}. No se generó remito ni hace falta firma.`}</p>`:''}
     <div class="r-top"><span class="r-chips">${chipsMov(m)}</span><span class="mono muted">${fFecha(m.fecha)}</span></div>
@@ -636,11 +672,36 @@ function abrirVer(id, soloRepintar, recienCreado){
                           : `<a href="${esc(u)}" target="_blank" rel="noopener"><img src="${esc(u)}" alt="Foto del remito"></a>`; }).join('')
         : `<p class="nota-ro">${m.tipo==='traslado'?'Todavía no se cargó la foto del remito firmado.':'Sin fotos.'}</p>`}
     </div>`;
+  const ped = deUnPedido(m), conEquipo = (m.items||[]).some(i=>i.clase==='equipo');
+  if(ped) $('#vBody').insertAdjacentHTML('beforeend', `<p class="muted" style="margin:0">Este ingreso se cargó desde el <button class="link" data-ped="${esc(ped.id)}">pedido N° ${String(ped.numero).padStart(2,'0')}</button>, por eso no se modifica ni se elimina desde acá.</p>`);
   $('#vFoot').innerHTML = `
+    ${S.admin && !ped ? `<button type="button" class="btn danger" data-act="eliminarMov" style="margin-right:auto">Eliminar</button>
+      ${TIPOS_EDITABLES.includes(m.tipo) && !conEquipo ? '<button type="button" class="btn" data-act="modificarMov">Modificar</button>' : ''}` : ''}
     <button type="button" class="btn ${m.tipo==='traslado'&&!(m.fotos||[]).length?'':'primary'}" data-act="imprimir">${m.tipo==='traslado'?'Imprimir remito':'Imprimir comprobante'}</button>
     ${S.admin?`<button type="button" class="btn ${m.tipo==='traslado'&&!(m.fotos||[]).length?'primary':''}" data-act="subirFirmado">${m.tipo==='traslado'?'Subir remito firmado':'Agregar foto'}</button>`:''}
     <button type="button" class="btn ghost" data-close>Cerrar</button>`;
   if(!dlgV.open) dlgV.showModal();
+}
+
+// Recarga todo lo que puede cambiar al deshacer un movimiento (incluye las máquinas de la flota)
+async function recargarTodo(){
+  await Promise.all(['herramientas','materiales','stock_materiales','movimientos','eventos'].map(cargar));
+  if(typeof fCargarTodo==='function' && typeof F!=='undefined' && F.iniciado) fCargarTodo();
+}
+// Eliminar: deshace el movimiento (todo vuelve a su lugar) y lo borra. Pide confirmación y un motivo opcional.
+async function eliminarMov(btn){
+  const m = S.movs.find(x=>x.id===S.verId); if(!m) return;
+  const vuelve = m.tipo==='consumo' ? `Lo dado de baja vuelve a ${nomUbic(m.origen_id)}.`
+    : mueve(m.tipo) ? `Todo vuelve de ${nomUbic(m.destino_id)} a ${nomUbic(m.origen_id)}.`
+    : `Lo que se cargó se saca de ${nomUbic(m.destino_id)}.`;
+  const motivo = prompt(`¿Seguro que querés eliminar ${nombreMov(m)}?\n\n${vuelve}\n\nEscribí el motivo (opcional) y tocá Aceptar:`, '');
+  if(motivo===null) return;                       // tocó Cancelar
+  btn.disabled = true; btn.textContent = 'Eliminando…';
+  const {error} = await sb.rpc('eliminar_movimiento', {p:{id:m.id, motivo}});
+  if(error){ btn.disabled = false; btn.textContent = 'Eliminar';
+    return alert(/function|schema cache/i.test(error.message) ? 'Falta correr el supabase.sql nuevo en Supabase.' : 'No se pudo eliminar:\n\n' + error.message); }
+  dlgV.close();
+  await recargarTodo();
 }
 
 async function subirFirmado(files){
@@ -1100,6 +1161,8 @@ document.addEventListener('click', async ev=>{
     case 'todoMat': S.mov.qty[a.dataset.m] = Number(a.dataset.max); renderSeleccion(); break;
     case 'quitarFoto': { const n=Number(a.dataset.n); URL.revokeObjectURL(S.fotosNuevas[n].url); S.fotosNuevas.splice(n,1); renderPreviews(); break; }
     case 'imprimir': imprimir(); break;
+    case 'eliminarMov': eliminarMov(a); break;
+    case 'modificarMov': { const m = S.movs.find(x=>x.id===S.verId); if(m){ dlgV.close(); abrirMov({editar:m}); } break; }
     case 'subirFirmado': $('#fFirmado').value=''; $('#fFirmado').click(); break;
     case 'guardarHerr': guardarHerr(); break;
     case 'guardarMat': guardarMat(); break;
@@ -1127,7 +1190,7 @@ $('#mFiltroHerr').addEventListener('input', renderSeleccion);
 $('#listaHerrSel').addEventListener('change', ev=>{
   const id = ev.target.dataset.h; if(!id) return;
   ev.target.checked ? S.mov.sel.add(id) : S.mov.sel.delete(id);
-  $('#cHerrSel').textContent = `${S.mov.sel.size} de ${herrEn($('#mOrigen').value).length}`;
+  $('#cHerrSel').textContent = `${S.mov.sel.size} de ${herrDisponibles($('#mOrigen').value).length}`;
 });
 $('#listaMatSel').addEventListener('input', ev=>{ const id = ev.target.dataset.m; if(id) S.mov.qty[id] = ev.target.value; });
 $('#mFoto').addEventListener('change', ev=>{
